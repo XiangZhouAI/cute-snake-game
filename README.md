@@ -14,7 +14,23 @@ Your score stays on screen the whole time. The candy apple is the good treat: it
 
 New treats can be added by registering one definition (id, drawing, score change, length change, and spawn weight). The game keeps a small mix on empty cells: one good treat and two bad ones, never on you, Pip, or a pumpkin.
 
-LAN multiplayer is not in this version. Extra bot modes are not in this version.
+## Bot moods
+
+Pip starts **Lazy**: hunts treats and does not chase you. That is the same Pip as before.
+
+The buttons above the board switch the mood:
+
+- **Lazy.** Pip only hunts treats. A long Pip still nibbles a bad treat so the board stays open.
+- **Aggressive.** Pip hunts you. If Pip is the shorter snake, it eats candy first, then comes after you. Touch still follows the length rule: the longer snake bites, the shorter one loses about half.
+- **In between.** Nib, a mint snake, joins Pip. They hunt treats, and a longer snake will bite a shorter one. That includes the two bots.
+
+Your controls do not change.
+
+## Shared board
+
+Opening the file, or the tiny static server below, is one game on that screen. Pip is there. Another phone gets its own separate game.
+
+To play **one** board together, run `server.py` (or Docker). The first browser hosts the board. Each later phone or laptop that opens the same address gets its own snake on that board. Keep the first screen open while you play. Up to four people. The bot mood is shared.
 
 ## Controls
 
@@ -51,7 +67,7 @@ python3 -m http.server 8080 --bind 0.0.0.0
 
 Then open <http://127.0.0.1:8080>.
 
-Binding `0.0.0.0` also lets a phone on the same Wi-Fi open the game without Docker.
+Binding `0.0.0.0` also lets a phone on the same Wi-Fi open the game without Docker. Each browser still has its own board. For one shared board, use the server below instead.
 
 ### Try it on a phone
 
@@ -61,9 +77,23 @@ Binding `0.0.0.0` also lets a phone on the same Wi-Fi open the game without Dock
 4. Swipe on the board, and also tap the on-screen directional buttons. Both should steer your snake.
 5. If the phone cannot connect, the computer’s firewall may need to allow TCP 8080.
 
+## Play together on the LAN
+
+From this folder:
+
+```bash
+python3 server.py
+```
+
+Then open <http://127.0.0.1:8080> on this computer. That browser is the host. On a phone or another laptop on the same Wi-Fi, open `http://<lan-ip>:8080`. Each device steers its own snake. Arrows, WASD, swipes, and the on-screen buttons all still work, and they move only your snake.
+
+Find the LAN IP the same way as above (`hostname -I`, `ipconfig getifaddr en0`, or `ipconfig`). The host firewall may need to allow TCP 8080. Leave the first screen open. If that tab closes, someone else who is still connected keeps the board.
+
+`server.py` is the standard library only. You do not need npm.
+
 ## Docker
 
-The container serves the same static files and listens on `0.0.0.0` port 8080.
+The container runs that same shared server and listens on `0.0.0.0` port 8080.
 
 From this folder:
 

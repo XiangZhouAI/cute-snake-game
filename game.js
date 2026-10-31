@@ -1,6 +1,8 @@
 /* Starlight Snake — top-down 2D only.
    Segments are {x, y}. A later version could add z; this one never moves on a Z axis.
-   Food score and length changes come only from the registry, not from hardcoded ids. */
+   Food score and length changes come only from the registry, not from hardcoded ids.
+   Bot moods: lazy hunts food, aggressive hunts snakes, in between does both.
+   server.py shares one board across browsers on the LAN. */
 (function () {
   "use strict";
 
@@ -14,8 +16,6 @@
   var canvas = document.getElementById("board");
   var ctx = canvas.getContext("2d");
   var scoreEl = document.getElementById("score");
-  var youEl = document.getElementById("you-len");
-  var pipEl = document.getElementById("pip-len");
   var boardWrap = document.querySelector(".board-wrap");
 
   var cellSize = 32;
@@ -263,6 +263,47 @@
     blush: "rgba(255, 176, 214, 0.95)",
     mark: "moon"
   };
+  var NIB_LOOK = {
+    body: "#7fd8c6",
+    belly: "#e7fff8",
+    outline: "#1d6d62",
+    blush: "rgba(255, 176, 190, 0.95)",
+    mark: "heart"
+  };
+  var LILAC_LOOK = {
+    body: "#d7a4ff",
+    belly: "#f7ecff",
+    outline: "#6a3d93",
+    blush: "rgba(255, 170, 200, 0.95)",
+    mark: "heart"
+  };
+  var ROSE_LOOK = {
+    body: "#ff8fb3",
+    belly: "#ffe4ee",
+    outline: "#9a3a5c",
+    blush: "rgba(255, 180, 160, 0.95)",
+    mark: "gem"
+  };
+  var GOLD_LOOK = {
+    body: "#ffd56a",
+    belly: "#fff6d4",
+    outline: "#a07820",
+    blush: "rgba(255, 160, 140, 0.9)",
+    mark: "moon"
+  };
+  var LOOKS = {
+    sunny: PLAYER_LOOK,
+    pip: BOT_LOOK,
+    nib: NIB_LOOK,
+    lilac: LILAC_LOOK,
+    rose: ROSE_LOOK,
+    gold: GOLD_LOOK
+  };
+  var MODE_NOTE = {
+    lazy: "Pip hunts treats and does not chase you.",
+    between: "Pip and Nib hunt treats. A longer snake bites a shorter one, bots included.",
+    aggressive: "Pip hunts you. If Pip is shorter, it grabs candy first, then comes after you."
+  };
 
   var BOARD_STARS = [
     { fx: 0.12, fy: 0.08, r: 1.2, p: 0.2 },
@@ -289,17 +330,48 @@
   var foods = [];
   var particles = [];
   var floaters = [];
+  var snakes = [];
   var player;
   var bot;
+  var botMode = "lazy";
+  var netTick = 0;
+  var lan = { role: null, you: null, ws: null, ready: false, lastTick: 0, pendingDir: null };
   var PIP_SNACK_LENGTH = 9;
   var debug = { pause: false, manualBot: false, steps: 0 };
   var lastTime = 0;
   var acc = 0;
   var swipe = null;
 
+  function snakeById(id) {
+    for (var i = 0; i < snakes.length; i++) {
+      if (snakes[i].id === id) return snakes[i];
+    }
+    return null;
+  }
+
+  function displayName(snake) {
+    if (!snake) return "";
+    if (lan.you && snake.id === lan.you) return "You";
+    if (!lan.role && snake.kind === "human") return "You";
+    return snake.name || "Snake";
+  }
+
+  function popColor(snake) {
+    if (!snake) return "#ffb15e";
+    if (snake.id === "player" || snake.lookId === "sunny") return "#ffb15e";
+    if (snake.id === "bot" || snake.lookId === "pip") return "#d4c4ff";
+    var look = LOOKS[snake.lookId];
+    return look ? look.body : "#ffb15e";
+  }
+
   function makePlayer() {
     return {
       id: "player",
+      name: "You",
+      kind: "human",
+      lookId: "sunny",
+      mode: null,
+      score: 0,
       alive: true,
       dir: { x: 1, y: 0 },
       queued: null,
@@ -316,6 +388,11 @@
   function makeBot() {
     return {
       id: "bot",
+      name: "Pip",
+      kind: "bot",
+      lookId: "pip",
+      mode: botMode === "between" ? "between" : botMode,
+      score: 0,
       alive: true,
       dir: { x: -1, y: 0 },
       queued: null,
@@ -326,6 +403,38 @@
         { x: 10, y: 1 },
         { x: 11, y: 1 }
       ]
+    };
+  }
+
+  function makeNib() {
+    return {
+      id: "nib",
+      name: "Nib",
+      kind: "bot",
+      lookId: "nib",
+      mode: "between",
+      score: 0,
+      alive: false,
+      dir: { x: -1, y: 0 },
+      queued: null,
+      respawnAt: 0,
+      segments: []
+    };
+  }
+
+  function makeHuman(id, name, lookId) {
+    return {
+      id: id,
+      name: name,
+      kind: "human",
+      lookId: lookId,
+      mode: null,
+      score: 0,
+      alive: false,
+      dir: { x: 1, y: 0 },
+      queued: null,
+      respawnAt: 0,
+      segments: []
     };
   }
 
@@ -362,12 +471,27 @@
     return null;
   }
 
+  function occupiedByAny(x, y) {
+    for (var i = 0; i < snakes.length; i++) {
+      if (occupies(snakes[i], x, y, false)) return true;
+    }
+    return false;
+  }
+
   function isFree(x, y) {
     if (!inBounds(x, y) || isPumpkin(x, y)) return false;
-    if (occupies(player, x, y, false)) return false;
-    if (occupies(bot, x, y, false)) return false;
+    if (occupiedByAny(x, y)) return false;
     if (foodAt(x, y)) return false;
     return true;
+  }
+
+  function othersOf(snake) {
+    var list = [];
+    for (var i = 0; i < snakes.length; i++) {
+      var other = snakes[i];
+      if (other !== snake && other.alive && other.segments.length) list.push(other);
+    }
+    return list;
   }
 
   function takeFoodAt(x, y) {
@@ -476,54 +600,88 @@
     floaters.push({ x: c.cx, y: c.cy, text: text, color: color, life: 1 });
   }
 
+  function cleanDir(dir) {
+    if (!dir) return null;
+    var dx = Math.sign(Number(dir.x) || 0);
+    var dy = dx !== 0 ? 0 : Math.sign(Number(dir.y) || 0);
+    if (!dx && !dy) return null;
+    return { x: dx, y: dy };
+  }
+
   function setPlayerDir(dx, dy) {
     if (!player || !player.alive) return;
-    dx = Math.sign(dx);
-    dy = dx !== 0 ? 0 : Math.sign(dy);
-    if (!dx && !dy) return;
-    if (player.segments.length > 1 && dx === -player.dir.x && dy === -player.dir.y) return;
-    player.queued = { x: dx, y: dy };
+    var dir = cleanDir({ x: dx, y: dy });
+    if (!dir) return;
+    if (player.segments.length > 1 && dir.x === -player.dir.x && dir.y === -player.dir.y) return;
+    if (lan.role === "guest") {
+      lan.pendingDir = dir;
+      send({ type: "input", dir: dir });
+      return;
+    }
+    player.queued = dir;
   }
 
-  function applyPlayerInput() {
-    if (!player.queued) return;
-    var q = player.queued;
-    var reverse = player.segments.length > 1 && q.x === -player.dir.x && q.y === -player.dir.y;
-    if (!reverse) player.dir = { x: q.x, y: q.y };
-    player.queued = null;
+  function queueRemote(id, dir) {
+    var snake = snakeById(id);
+    var clean = cleanDir(dir);
+    if (!snake || !clean || snake.kind !== "human" || !snake.alive) return;
+    if (snake.segments.length > 1 && clean.x === -snake.dir.x && clean.y === -snake.dir.y) return;
+    snake.queued = clean;
   }
 
-  function botCellBlocked(nx, ny) {
+  function applyQueued(snake) {
+    if (!snake.queued) return;
+    var q = snake.queued;
+    var reverse = snake.segments.length > 1 && q.x === -snake.dir.x && q.y === -snake.dir.y;
+    if (!reverse) snake.dir = { x: q.x, y: q.y };
+    snake.queued = null;
+  }
+
+  function botCellBlocked(snake, nx, ny) {
     if (!inBounds(nx, ny) || isPumpkin(nx, ny)) return true;
-    if (occupies(bot, nx, ny, true)) return true;
-    if (player && player.alive && player.segments.length) {
-      var head = player.segments[0];
-      if (head.x === nx && head.y === ny) return true;
-      if (player.segments.length === bot.segments.length && occupies(player, nx, ny, false)) return true;
+    if (occupies(snake, nx, ny, true)) return true;
+    var mode = snake.mode || "lazy";
+    var others = othersOf(snake);
+    var i;
+    for (i = 0; i < others.length; i++) {
+      var other = others[i];
+      var head = other.segments[0];
+      var longer = snake.segments.length > other.segments.length;
+      if (mode === "lazy") {
+        if (head.x === nx && head.y === ny) return true;
+        if (snake.segments.length === other.segments.length && occupies(other, nx, ny, false)) return true;
+      } else if (!longer && occupies(other, nx, ny, false)) {
+        return true;
+      }
     }
     return false;
   }
 
-  function stepCost(nx, ny) {
+  function stepCost(snake, nx, ny) {
     var cost = 1;
     var food = foodAt(nx, ny);
+    var mode = snake.mode || "lazy";
     if (food) {
       var type = getType(food.typeId);
-      if (type && type.lengthDelta < 0 && bot.segments.length < PIP_SNACK_LENGTH) cost += 16;
-      if (type && type.lengthDelta > 0 && bot.segments.length >= PIP_SNACK_LENGTH) cost += 12;
+      if (type && type.lengthDelta < 0 && snake.segments.length < PIP_SNACK_LENGTH) cost += 16;
+      if (type && type.lengthDelta > 0 && snake.segments.length >= PIP_SNACK_LENGTH) cost += 12;
     }
-    if (player && player.alive && player.segments.length) {
-      var head = player.segments[0];
+    var others = othersOf(snake);
+    var i, s;
+    for (i = 0; i < others.length; i++) {
+      var other = others[i];
+      var prey = mode !== "lazy" && snake.segments.length > other.segments.length;
+      if (prey) continue;
+      var head = other.segments[0];
       if (Math.abs(head.x - nx) + Math.abs(head.y - ny) === 1) cost += 8;
-      var i;
-      for (i = 1; i < player.segments.length; i++) {
-        if (player.segments[i].x === nx && player.segments[i].y === ny) cost += 6;
+      for (s = 1; s < other.segments.length; s++) {
+        if (other.segments[s].x === nx && other.segments[s].y === ny) cost += 6;
       }
     }
     return cost;
   }
 
-  function shortestDir(head, goals) {
+  function shortestDir(snake, head, goals) {
     var goalSet = {};
     var g;
     for (g = 0; g < goals.length; g++) goalSet[goals[g].x + "," + goals[g].y] = true;
@@ -550,12 +708,12 @@
       }
       for (var di = 0; di < dirs.length; di++) {
         var dir = dirs[di];
-        if (ck === startK && bot.segments.length > 1 && dir.x === -bot.dir.x && dir.y === -bot.dir.y) continue;
+        if (ck === startK && snake.segments.length > 1 && dir.x === -snake.dir.x && dir.y === -snake.dir.y) continue;
         var nx = cur.x + dir.x;
         var ny = cur.y + dir.y;
-        if (botCellBlocked(nx, ny)) continue;
+        if (botCellBlocked(snake, nx, ny)) continue;
         var nk = nx + "," + ny;
-        var nd = cur.d + stepCost(nx, ny);
+        var nd = cur.d + stepCost(snake, nx, ny);
         if (dist[nk] === undefined || nd < dist[nk]) {
           dist[nk] = nd;
           prev[nk] = ck;
@@ -576,7 +734,26 @@
     return { x: x - head.x, y: y - head.y };
   }
 
-  function fallbackDir(head) {
+  function nearestPrey(snake) {
+    var others = othersOf(snake);
+    var best = null;
+    var bestD = Infinity;
+    var head = snake.segments[0];
+    for (var i = 0; i < others.length; i++) {
+      var other = others[i];
+      if (snake.segments.length <= other.segments.length) continue;
+      var oh = other.segments[0];
+      var dist = Math.abs(oh.x - head.x) + Math.abs(oh.y - head.y);
+      if (dist < bestD) {
+        bestD = dist;
+        best = oh;
+      }
+    }
+    return best;
+  }
+
+  function fallbackDir(snake, head) {
+    var mode = snake.mode || "lazy";
     var options = [
       { x: 0, y: -1 },
       { x: -1, y: 0 },
@@ -585,19 +762,28 @@
     ];
     var best = null;
     var bestScore = Infinity;
+    var prey = mode === "lazy" ? null : nearestPrey(snake);
+    var others = othersOf(snake);
     for (var i = 0; i < options.length; i++) {
       var d = options[i];
-      if (bot.segments.length > 1 && d.x === -bot.dir.x && d.y === -bot.dir.y) continue;
+      if (snake.segments.length > 1 && d.x === -snake.dir.x && d.y === -snake.dir.y) continue;
       var nx = head.x + d.x;
       var ny = head.y + d.y;
-      if (botCellBlocked(nx, ny)) continue;
-      var scoreHere = stepCost(nx, ny);
-      if (d.x === bot.dir.x && d.y === bot.dir.y) scoreHere -= 0.4;
-      if (player && player.alive && player.segments.length) {
-        var ph = player.segments[0];
-        var now = Math.abs(ph.x - head.x) + Math.abs(ph.y - head.y);
-        var next = Math.abs(ph.x - nx) + Math.abs(ph.y - ny);
-        if (next < now) scoreHere += 4;
+      if (botCellBlocked(snake, nx, ny)) continue;
+      var scoreHere = stepCost(snake, nx, ny);
+      if (d.x === snake.dir.x && d.y === snake.dir.y) scoreHere -= 0.4;
+      if (mode === "lazy") {
+        var o;
+        for (o = 0; o < others.length; o++) {
+          var ph = others[o].segments[0];
+          var now = Math.abs(ph.x - head.x) + Math.abs(ph.y - head.y);
+          var next = Math.abs(ph.x - nx) + Math.abs(ph.y - ny);
+          if (next < now) scoreHere += 4;
+        }
+      } else if (prey) {
+        var preyNow = Math.abs(prey.x - head.x) + Math.abs(prey.y - head.y);
+        var preyNext = Math.abs(prey.x - nx) + Math.abs(prey.y - ny);
+        if (preyNext < preyNow) scoreHere -= 3;
       }
       if (scoreHere < bestScore) {
         bestScore = scoreHere;
@@ -607,9 +793,7 @@
     return best;
   }
 
-  function chooseBotDirection() {
-    if (!bot.alive || !bot.segments.length) return null;
-    var head = bot.segments[0];
+  function foodGoals(snake) {
     var good = [];
     var bad = [];
     for (var i = 0; i < foods.length; i++) {
@@ -618,21 +802,45 @@
       if (type.lengthDelta > 0) good.push(foods[i]);
       else if (type.lengthDelta < 0) bad.push(foods[i]);
     }
-    // Hunt candy. Once Pip is long enough to crowd the board, nibble a bad treat first.
-    var goals = (bot.segments.length >= PIP_SNACK_LENGTH && bad.length) ? bad : good;
-    var dir = goals.length ? shortestDir(head, goals) : null;
-    if (!dir) dir = fallbackDir(head);
-    if (!dir) return null;
-    if (bot.segments.length > 1 && dir.x === -bot.dir.x && dir.y === -bot.dir.y) {
-      return fallbackDir(head);
-    }
-    return dir;
+    // Hunt candy. Once a bot is long enough to crowd the board, nibble a bad treat first.
+    if (snake.segments.length >= PIP_SNACK_LENGTH && bad.length) return bad;
+    return good;
   }
 
-  function applyBotAI() {
-    if (debug.manualBot) return;
-    var choice = chooseBotDirection();
-    if (choice) bot.dir = { x: choice.x, y: choice.y };
+  function preyGoals(snake) {
+    var goals = [];
+    var others = othersOf(snake);
+    var i, s;
+    for (i = 0; i < others.length; i++) {
+      var other = others[i];
+      if (snake.segments.length <= other.segments.length) continue;
+      for (s = 0; s < other.segments.length; s++) {
+        goals.push({ x: other.segments[s].x, y: other.segments[s].y });
+      }
+    }
+    return goals;
+  }
+
+  function chooseBotDirection(snake) {
+    if (!snake || !snake.alive || !snake.segments.length) return null;
+    var mode = snake.mode || "lazy";
+    var head = snake.segments[0];
+    var goals;
+    if (mode === "aggressive") {
+      var prey = preyGoals(snake);
+      goals = prey.length ? prey : foodGoals(snake);
+    } else if (mode === "between") {
+      goals = foodGoals(snake).concat(preyGoals(snake));
+    } else {
+      goals = foodGoals(snake);
+    }
+    var dir = goals.length ? shortestDir(snake, head, goals) : null;
+    if (!dir) dir = fallbackDir(snake, head);
+    if (!dir) return null;
+    if (snake.segments.length > 1 && dir.x === -snake.dir.x && dir.y === -snake.dir.y) {
+      return fallbackDir(snake, head);
+    }
+    return dir;
   }
 
   function planMove(snake) {
@@ -692,12 +900,12 @@
 
   function despawn(snake) {
     if (snake.segments.length) {
-      burst(snake.segments[0].x, snake.segments[0].y, snake.id === "player" ? "#ffb15e" : "#d4c4ff");
+      burst(snake.segments[0].x, snake.segments[0].y, popColor(snake));
     }
     snake.alive = false;
     snake.segments = [];
     snake.queued = null;
-    if (snake.id === "bot") snake.respawnAt = performance.now() + BOT_RESPAWN_MS;
+    if (snake.kind === "bot") snake.respawnAt = performance.now() + BOT_RESPAWN_MS;
   }
 
   function cutHalf(snake) {
@@ -712,33 +920,113 @@
     if (lost) burst(lost.x, lost.y, "#ffe08a");
   }
 
-  function resolveContact(plans) {
-    if (!player.alive || !bot.alive) return;
-    var pPlan = plans.get(player);
-    var bPlan = plans.get(bot);
-    if (player.segments.length === bot.segments.length) {
-      var blockP = hitsSolidOther(pPlan, bot, bPlan);
-      var blockB = hitsSolidOther(bPlan, player, pPlan);
-      if (blockP) pPlan.blocked = true;
+  function resolvePair(a, b, plans) {
+    if (!a || !b || !a.alive || !b.alive) return;
+    var aPlan = plans.get(a);
+    var bPlan = plans.get(b);
+    if (!aPlan || !bPlan) return;
+    if (a.segments.length === b.segments.length) {
+      var blockA = hitsSolidOther(aPlan, b, bPlan);
+      var blockB = hitsSolidOther(bPlan, a, aPlan);
+      if (blockA) aPlan.blocked = true;
       if (blockB) bPlan.blocked = true;
       return;
     }
-    if (!touches(player, pPlan, bot, bPlan)) return;
-    var smaller = player.segments.length < bot.segments.length ? player : bot;
+    if (!touches(a, aPlan, b, bPlan)) return;
+    var smaller = a.segments.length < b.segments.length ? a : b;
     cutHalf(smaller);
-    if (!player.alive || !bot.alive) return;
+    if (!a.alive || !b.alive) return;
     for (var pass = 0; pass < 3; pass++) {
-      var pp = plans.get(player);
-      var bp = plans.get(bot);
-      if (!touches(player, pp, bot, bp)) break;
-      var small = player.segments.length <= bot.segments.length ? player : bot;
-      var large = small === player ? bot : player;
+      var ap = plans.get(a);
+      var bp = plans.get(b);
+      if (!touches(a, ap, b, bp)) break;
+      var small = a.segments.length <= b.segments.length ? a : b;
+      var large = small === a ? b : a;
       var sp = plans.get(small);
       var lp = plans.get(large);
       if (sp && !sp.blocked) sp.blocked = true;
       else if (lp && !lp.blocked) lp.blocked = true;
       else break;
     }
+  }
+
+  function resolveMany(plans, live) {
+    var ia, ib, a, b;
+    for (ia = 0; ia < live.length; ia++) {
+      for (ib = ia + 1; ib < live.length; ib++) {
+        a = live[ia];
+        b = live[ib];
+        if (a.segments.length !== b.segments.length) continue;
+        var ap = plans.get(a);
+        var bp = plans.get(b);
+        if (!ap || !bp) continue;
+        if (hitsSolidOther(ap, b, bp)) ap.blocked = true;
+        if (hitsSolidOther(bp, a, ap)) bp.blocked = true;
+      }
+    }
+    var victims = [];
+    var seen = {};
+    for (ia = 0; ia < live.length; ia++) {
+      for (ib = ia + 1; ib < live.length; ib++) {
+        a = live[ia];
+        b = live[ib];
+        if (!a.alive || !b.alive) continue;
+        if (a.segments.length === b.segments.length) continue;
+        if (!touches(a, plans.get(a), b, plans.get(b))) continue;
+        var smaller = a.segments.length < b.segments.length ? a : b;
+        if (seen[smaller.id]) continue;
+        seen[smaller.id] = true;
+        victims.push(smaller);
+      }
+    }
+    for (ia = 0; ia < victims.length; ia++) cutHalf(victims[ia]);
+    var pass;
+    for (pass = 0; pass < 3; pass++) {
+      var changed = false;
+      for (ia = 0; ia < live.length; ia++) {
+        for (ib = ia + 1; ib < live.length; ib++) {
+          a = live[ia];
+          b = live[ib];
+          if (!a.alive || !b.alive) continue;
+          var ap2 = plans.get(a);
+          var bp2 = plans.get(b);
+          if (!touches(a, ap2, b, bp2)) continue;
+          var small = null;
+          if (a.segments.length < b.segments.length) small = a;
+          else if (b.segments.length < a.segments.length) small = b;
+          if (!small) {
+            if (ap2 && !ap2.blocked) { ap2.blocked = true; changed = true; }
+            if (bp2 && !bp2.blocked) { bp2.blocked = true; changed = true; }
+            continue;
+          }
+          var sp = plans.get(small);
+          var large = small === a ? b : a;
+          var lp = plans.get(large);
+          if (sp && !sp.blocked) { sp.blocked = true; changed = true; }
+          else if (lp && !lp.blocked) { lp.blocked = true; changed = true; }
+        }
+      }
+      if (!changed) break;
+    }
+  }
+
+  function resolveContact(plans) {
+    var live = [];
+    for (var i = 0; i < snakes.length; i++) {
+      if (snakes[i].alive && snakes[i].segments.length) live.push(snakes[i]);
+    }
+    if (live.length < 2) return;
+    if (live.length === 2) {
+      var a = live[0];
+      var b = live[1];
+      if (a === bot && b === player) {
+        a = player;
+        b = bot;
+      }
+      resolvePair(a, b, plans);
+      return;
+    }
+    resolveMany(plans, live);
   }
 
   function moveSnake(snake, nx, ny) {
@@ -750,8 +1038,9 @@
       var type = getType(food.typeId);
       if (type) {
         lengthDelta = type.lengthDelta;
-        if (snake.id === "player") {
-          score = Math.max(0, score + type.scoreDelta);
+        if (snake.kind === "human") {
+          snake.score = Math.max(0, (snake.score || 0) + type.scoreDelta);
+          if (snake === player) score = snake.score;
           addFloater(
             nx,
             ny,
@@ -800,7 +1089,7 @@
       if (needFront) {
         var fx = head.x + dir.x;
         var fy = head.y + dir.y;
-        if (!inBounds(fx, fy) || isPumpkin(fx, fy) || occupies(player, fx, fy, false) || occupies(bot, fx, fy, false)) {
+        if (!inBounds(fx, fy) || isPumpkin(fx, fy) || occupiedByAny(fx, fy)) {
           return null;
         }
       }
@@ -830,38 +1119,81 @@
     snake.segments = spot.segments;
     snake.dir = spot.dir;
     snake.queued = null;
-    burst(spot.segments[0].x, spot.segments[0].y, snake.id === "player" ? "#ffb15e" : "#d4c4ff");
+    burst(spot.segments[0].x, spot.segments[0].y, popColor(snake));
     return true;
   }
 
   function step() {
-    if (player.alive) applyPlayerInput();
-    if (bot.alive) applyBotAI();
+    var i;
+    for (i = 0; i < snakes.length; i++) {
+      var snake = snakes[i];
+      if (!snake.alive) continue;
+      if (snake.kind === "bot") {
+        if (!debug.manualBot) {
+          var choice = chooseBotDirection(snake);
+          if (choice) snake.dir = { x: choice.x, y: choice.y };
+        }
+      } else {
+        applyQueued(snake);
+      }
+    }
 
     var plans = new Map();
-    if (player.alive && player.segments.length) plans.set(player, planMove(player));
-    if (bot.alive && bot.segments.length) plans.set(bot, planMove(bot));
+    for (i = 0; i < snakes.length; i++) {
+      var planned = snakes[i];
+      if (planned.alive && planned.segments.length) plans.set(planned, planMove(planned));
+    }
     resolveContact(plans);
 
-    [player, bot].forEach(function (snake) {
-      if (!snake.alive) return;
-      var plan = plans.get(snake);
-      if (!plan || plan.blocked) return;
-      moveSnake(snake, plan.x, plan.y);
-    });
+    for (i = 0; i < snakes.length; i++) {
+      var moving = snakes[i];
+      if (!moving.alive) continue;
+      var plan = plans.get(moving);
+      if (!plan || plan.blocked) continue;
+      moveSnake(moving, plan.x, plan.y);
+    }
 
-    if (!player.alive) respawnSnake(player, 3);
+    for (i = 0; i < snakes.length; i++) {
+      var human = snakes[i];
+      if (human.kind === "human" && !human.alive) respawnSnake(human, 3);
+    }
     ensureFoods();
     debug.steps += 1;
+    if (player) score = player.score || 0;
   }
 
   function renderHud() {
-    var scoreText = "Score " + score;
+    var shown = player ? (player.score || 0) : score;
+    var scoreText = "Score " + shown;
     if (scoreEl.textContent !== scoreText) scoreEl.textContent = scoreText;
-    var youText = "You " + (player && player.alive ? player.segments.length : 0);
-    var pipText = bot && bot.alive ? "Pip " + bot.segments.length : "Pip is coming back";
-    if (youEl.textContent !== youText) youEl.textContent = youText;
-    if (pipEl.textContent !== pipText) pipEl.textContent = pipText;
+    var el = document.getElementById("lengths");
+    if (!el) return;
+    var frag = document.createDocumentFragment();
+    var count = 0;
+    for (var i = 0; i < snakes.length; i++) {
+      var snake = snakes[i];
+      if (count) {
+        var sep = document.createElement("span");
+        sep.className = "sep";
+        sep.setAttribute("aria-hidden", "true");
+        sep.textContent = "·";
+        frag.appendChild(sep);
+      }
+      var sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.setAttribute("aria-hidden", "true");
+      var look = LOOKS[snake.lookId] || PLAYER_LOOK;
+      sw.style.background = look.body;
+      var label = document.createElement("span");
+      var name = displayName(snake);
+      if (snake.kind === "bot" && !snake.alive) label.textContent = name + " is coming back";
+      else label.textContent = name + " " + (snake.alive ? snake.segments.length : 0);
+      frag.appendChild(sw);
+      frag.appendChild(label);
+      count++;
+    }
+    while (el.firstChild) el.removeChild(el.firstChild);
+    el.appendChild(frag);
   }
 
   function drawStar(context, x, y, r) {
@@ -1106,6 +1438,23 @@
       ctx.closePath();
       ctx.fill();
     }
+    if (look.mark === "heart") {
+      ctx.save();
+      ctx.translate(c.cx, c.cy - cellSize * 0.78);
+      ctx.fillStyle = "#ff8fb3";
+      ctx.beginPath();
+      ctx.moveTo(0, cellSize * 0.08);
+      ctx.bezierCurveTo(-cellSize * 0.16, -cellSize * 0.08, -cellSize * 0.08, -cellSize * 0.16, 0, -cellSize * 0.05);
+      ctx.bezierCurveTo(cellSize * 0.08, -cellSize * 0.16, cellSize * 0.16, -cellSize * 0.08, 0, cellSize * 0.08);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (look.mark === "gem") {
+      ctx.fillStyle = "#fff6ea";
+      ctx.beginPath();
+      ctx.arc(c.cx, c.cy - cellSize * 0.78, cellSize * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function drawFoods(time) {
@@ -1159,8 +1508,16 @@
     var p;
     for (p = 0; p < pumpkins.length; p++) drawPumpkin(pumpkins[p]);
     drawFoods(time);
-    drawSnake(bot, BOT_LOOK);
-    drawSnake(player, PLAYER_LOOK);
+    var si;
+    for (si = 0; si < snakes.length; si++) {
+      if (snakes[si].kind === "bot") drawSnake(snakes[si], LOOKS[snakes[si].lookId] || BOT_LOOK);
+    }
+    for (si = 0; si < snakes.length; si++) {
+      if (snakes[si].kind === "human" && snakes[si] !== player) {
+        drawSnake(snakes[si], LOOKS[snakes[si].lookId] || PLAYER_LOOK);
+      }
+    }
+    if (player) drawSnake(player, LOOKS[player.lookId] || PLAYER_LOOK);
     drawFx();
   }
 
@@ -1179,28 +1536,7 @@
     floaters = floaters.filter(function (f) { return f.life > 0; });
   }
 
-  function fitCanvas() {
-    if (!boardWrap) return;
-    var avail = boardWrap.clientWidth - 4;
-    if (avail < 40) return;
-    var top = document.querySelector(".top");
-    var hint = document.querySelector(".hint");
-    var label = document.querySelector(".dpad-label");
-    var dpad = document.querySelector(".dpad");
-    var lengths = document.querySelector(".lengths");
-    var used = 36;
-    if (top) used += top.offsetHeight;
-    if (hint) used += hint.offsetHeight;
-    if (label) used += label.offsetHeight;
-    if (dpad) used += dpad.offsetHeight;
-    if (lengths) used += lengths.offsetHeight;
-    var maxH = Math.max(180, window.innerHeight - used);
-    var nextW = avail;
-    var nextH = nextW * (ROWS / COLS);
-    if (nextH > maxH) {
-      nextH = maxH;
-      nextW = nextH * (COLS / ROWS);
-    }
+  function paintSize(nextW, nextH) {
     cssW = nextW;
     cssH = nextH;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1210,28 +1546,69 @@
     canvas.height = Math.max(1, Math.round(cssH * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     cellSize = cssW / COLS;
+    boardWrap.style.width = Math.ceil(cssW + 12) + "px";
+    boardWrap.style.marginLeft = "auto";
+    boardWrap.style.marginRight = "auto";
+  }
+
+  function fitCanvas() {
+    if (!boardWrap) return;
+    var column = document.querySelector(".wrap") || boardWrap;
+    var avail = column.clientWidth - 24;
+    if (avail < 40) return;
+    var top = document.querySelector(".top");
+    var hint = document.querySelector(".hint");
+    var modeNote = document.querySelector(".mode-note");
+    var modes = document.querySelector(".modes");
+    var label = document.querySelector(".dpad-label");
+    var dpad = document.querySelector(".dpad");
+    var lengths = document.querySelector(".lengths");
+    var lanEl = document.getElementById("lan");
+    var used = 48;
+    if (top) used += top.offsetHeight;
+    if (hint) used += hint.offsetHeight;
+    if (modeNote) used += modeNote.offsetHeight;
+    if (modes) used += modes.offsetHeight;
+    if (label) used += label.offsetHeight;
+    if (dpad) used += dpad.offsetHeight;
+    if (lengths) used += lengths.offsetHeight;
+    if (lanEl && !lanEl.hidden) used += lanEl.offsetHeight;
+    var maxH = Math.max(160, window.innerHeight - used);
+    var nextW = avail;
+    var nextH = nextW * (ROWS / COLS);
+    if (nextH > maxH) {
+      nextH = maxH;
+      nextW = nextH * (COLS / ROWS);
+    }
+    paintSize(nextW, nextH);
+    var edge = (lanEl && !lanEl.hidden) ? lanEl : lengths;
+    if (edge) {
+      var overflow = edge.getBoundingClientRect().bottom - (window.innerHeight - 8);
+      if (overflow > 1) {
+        var shrunk = Math.max(160, nextH - overflow);
+        paintSize(shrunk * (COLS / ROWS), shrunk);
+      }
+    }
+    if (cellSize) draw(performance.now());
   }
 
   function frame(now) {
     if (document.hidden) {
       lastTime = 0;
-      requestAnimationFrame(frame);
-      return;
-    }
-    if (!lastTime) lastTime = now;
-    var dt = now - lastTime;
-    lastTime = now;
-    if (dt > 400) dt = 400;
-    if (!debug.pause) {
-      acc += dt;
-      var spins = 0;
-      while (acc >= TICK_MS && spins < 4) {
-        acc -= TICK_MS;
-        step();
-        spins++;
-      }
-      if (!bot.alive && bot.respawnAt && now >= bot.respawnAt) {
-        if (respawnSnake(bot, 3)) bot.respawnAt = 0;
+    } else {
+      if (!lastTime) lastTime = now;
+      var dt = now - lastTime;
+      lastTime = now;
+      if (dt > 400) dt = 400;
+      if (!lan.role && !debug.pause) {
+        acc += dt;
+        var spins = 0;
+        while (acc >= TICK_MS && spins < 4) {
+          acc -= TICK_MS;
+          step();
+          spins++;
+        }
+        reviveBots(now);
       }
     }
     updateFx();
@@ -1241,14 +1618,86 @@
   }
 
   function cloneSnake(snake) {
+    if (!snake) return null;
     return {
       id: snake.id,
+      name: snake.name,
+      kind: snake.kind,
+      lookId: snake.lookId,
+      mode: snake.mode,
+      score: snake.score || 0,
       alive: snake.alive,
       dir: { x: snake.dir.x, y: snake.dir.y },
       queued: snake.queued ? { x: snake.queued.x, y: snake.queued.y } : null,
       respawnAt: snake.respawnAt,
       segments: snake.segments.map(function (s) { return { x: s.x, y: s.y }; })
     };
+  }
+
+  function reviveBots(now) {
+    var n = 0;
+    for (var i = 0; i < snakes.length; i++) {
+      var snake = snakes[i];
+      if (snake.kind === "bot" && !snake.alive && snake.respawnAt && now >= snake.respawnAt) {
+        if (respawnSnake(snake, 3)) {
+          snake.respawnAt = 0;
+          n += 1;
+        }
+      }
+    }
+    return n;
+  }
+
+  function showMode(mode) {
+    if (mode !== "lazy" && mode !== "between" && mode !== "aggressive") mode = "lazy";
+    botMode = mode;
+    var note = document.getElementById("mode-note");
+    if (note) note.textContent = MODE_NOTE[mode];
+    var buttons = document.querySelectorAll("[data-mode]");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute("aria-pressed", buttons[i].getAttribute("data-mode") === mode ? "true" : "false");
+    }
+  }
+
+  function dismissNib() {
+    var nib = snakeById("nib");
+    if (!nib) return;
+    if (nib.alive && nib.segments.length) burst(nib.segments[0].x, nib.segments[0].y, popColor(nib));
+    snakes = snakes.filter(function (s) { return s !== nib; });
+  }
+
+  function bringNib() {
+    var nib = snakeById("nib");
+    if (!nib) {
+      nib = makeNib();
+      snakes.push(nib);
+    }
+    nib.mode = "between";
+    if (!nib.alive) {
+      if (!respawnSnake(nib, 4) && !respawnSnake(nib, 3) && !respawnSnake(nib, 1)) {
+        nib.respawnAt = performance.now() + BOT_RESPAWN_MS;
+      }
+    }
+  }
+
+  function applyMode(mode) {
+    if (mode !== "lazy" && mode !== "between" && mode !== "aggressive") return;
+    var prev = botMode;
+    showMode(mode);
+    if (bot) bot.mode = mode;
+    if (mode === "between") bringNib();
+    else if (prev === "between") dismissNib();
+    renderHud();
+  }
+
+  function requestMode(mode) {
+    if (lan.role === "guest") {
+      showMode(mode);
+      send({ type: "mode", mode: mode });
+      return;
+    }
+    applyMode(mode);
+    if (lan.role === "host") broadcast();
   }
 
   function reset() {
@@ -1260,9 +1709,244 @@
     debug.steps = 0;
     player = makePlayer();
     bot = makeBot();
+    snakes = [player, bot];
     setupFoods();
     ensureFoods();
+    if (botMode === "between") bringNib();
+    showMode(botMode);
     renderHud();
+  }
+
+  function send(obj) {
+    if (!lan.ws || lan.ws.readyState !== 1) return;
+    try {
+      lan.ws.send(JSON.stringify(obj));
+    } catch (err) {
+      /* The socket is closing. */
+    }
+  }
+
+  function netState() {
+    return {
+      type: "state",
+      tick: netTick,
+      mode: botMode,
+      foods: foods.map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; }),
+      snakes: snakes.map(function (s) {
+        return {
+          id: s.id,
+          name: s.name,
+          kind: s.kind,
+          lookId: s.lookId,
+          mode: s.mode,
+          score: s.score || 0,
+          alive: !!s.alive,
+          dir: { x: s.dir.x, y: s.dir.y },
+          respawnIn: s.respawnAt ? Math.max(0, s.respawnAt - performance.now()) : 0,
+          segments: s.segments.map(function (seg) { return { x: seg.x, y: seg.y }; })
+        };
+      })
+    };
+  }
+
+  function broadcast() {
+    if (lan.role !== "host" || !lan.ready) return;
+    netTick += 1;
+    send(netState());
+  }
+
+  function lanHint() {
+    var host = location.host || "";
+    if (!host || host.indexOf("localhost") === 0 || host.indexOf("127.0.0.1") === 0) {
+      return "Shared board is on. From a phone, open this computer’s LAN address, port 8080.";
+    }
+    return "Shared board. Others on this Wi-Fi open http://" + host;
+  }
+
+  function setLanStatus(text) {
+    var el = document.getElementById("lan");
+    if (!el) return;
+    var next = text || "";
+    var hidden = !next;
+    if (el.textContent === next && el.hidden === hidden) return;
+    el.hidden = hidden;
+    el.textContent = next;
+    fitCanvas();
+  }
+
+  function reviveFromNet(raw) {
+    var dir = cleanDir(raw.dir) || { x: 1, y: 0 };
+    return {
+      id: raw.id,
+      name: raw.name || "Snake",
+      kind: raw.kind === "bot" ? "bot" : "human",
+      lookId: raw.lookId || "sunny",
+      mode: raw.mode || null,
+      score: raw.score || 0,
+      alive: !!raw.alive && !!(raw.segments && raw.segments.length),
+      dir: dir,
+      queued: null,
+      respawnAt: raw.respawnIn ? performance.now() + raw.respawnIn : 0,
+      segments: (raw.segments || []).map(function (s) { return { x: s.x, y: s.y }; })
+    };
+  }
+
+  function applyNetState(msg) {
+    if (!msg || !msg.snakes) return;
+    if (msg.tick && lan.lastTick && msg.tick < lan.lastTick) return;
+    if (msg.tick) lan.lastTick = msg.tick;
+    var oldScore = player ? (player.score || 0) : 0;
+    if (msg.mode) showMode(msg.mode);
+    foods = (msg.foods || []).map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; });
+    snakes = msg.snakes.map(reviveFromNet);
+    player = lan.you ? snakeById(lan.you) : null;
+    bot = snakeById("bot");
+    if (!player) {
+      for (var i = 0; i < snakes.length; i++) {
+        if (snakes[i].kind === "human") { player = snakes[i]; break; }
+      }
+    }
+    if (player) score = player.score || 0;
+    if (player && player.segments.length && (player.score || 0) !== oldScore) {
+      var delta = (player.score || 0) - oldScore;
+      var head = player.segments[0];
+      addFloater(head.x, head.y, (delta > 0 ? "+" : "") + delta, delta >= 0 ? "#ffe08a" : "#ff9bb5");
+    }
+    renderHud();
+    if (lan.role === "guest" && lan.pendingDir && player && player.alive) {
+      send({ type: "input", dir: lan.pendingDir });
+    }
+  }
+
+  function beginAsHost(msg) {
+    lan.role = "host";
+    lan.you = msg.id;
+    lan.ready = false;
+    reset();
+    player.id = msg.id;
+    player.name = msg.name || "Sunny";
+    player.lookId = msg.look || "sunny";
+    lan.ready = true;
+    setLanStatus(lanHint());
+    broadcast();
+  }
+
+  function beginAsGuest(msg) {
+    lan.role = "guest";
+    lan.you = msg.id;
+    lan.ready = true;
+    snakes = [];
+    player = null;
+    bot = null;
+    foods = [];
+    score = 0;
+    setLanStatus("Joining the shared board…");
+    renderHud();
+  }
+
+  function addPeer(peer) {
+    if (!peer || !peer.id || snakeById(peer.id)) return;
+    var snake = makeHuman(peer.id, peer.name || "Friend", peer.look || "lilac");
+    snakes.push(snake);
+    var placed = respawnSnake(snake, 4) || respawnSnake(snake, 3) || respawnSnake(snake, 1);
+    if (!placed) {
+      snakes = snakes.filter(function (s) { return s !== snake; });
+      send({ type: "reject", id: peer.id });
+      return;
+    }
+    broadcast();
+  }
+
+  function onLeave(id) {
+    var snake = snakeById(id);
+    if (!snake || snake.kind !== "human") return;
+    snakes = snakes.filter(function (s) { return s.id !== id; });
+    renderHud();
+    broadcast();
+  }
+
+  function onPromote(msg) {
+    lan.role = "host";
+    lan.ready = false;
+    if (msg.state && msg.state.snakes) {
+      netTick = msg.state.tick || 0;
+      lan.lastTick = 0;
+      applyNetState(msg.state);
+    } else if (!player) {
+      reset();
+      if (player && lan.you) player.id = lan.you;
+    }
+    lan.ready = true;
+    setLanStatus(lanHint());
+    broadcast();
+  }
+
+  function onSocketMessage(raw) {
+    var msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch (err) {
+      return;
+    }
+    if (!msg || !msg.type) return;
+    if (msg.type === "welcome") {
+      if (msg.role === "host") beginAsHost(msg);
+      else beginAsGuest(msg);
+      return;
+    }
+    if (msg.type === "full") {
+      lan.role = null;
+      lan.ready = false;
+      if (!player) reset();
+      setLanStatus("This table is full. This screen is its own game.");
+      return;
+    }
+    if (msg.type === "peer" && lan.role === "host") {
+      addPeer(msg);
+      return;
+    }
+    if (msg.type === "leave" && lan.role === "host") {
+      onLeave(msg.id);
+      return;
+    }
+    if (msg.type === "input" && lan.role === "host") {
+      queueRemote(msg.id, msg.dir);
+      return;
+    }
+    if (msg.type === "mode" && lan.role === "host") {
+      applyMode(msg.mode);
+      broadcast();
+      return;
+    }
+    if (msg.type === "state" && lan.role === "guest") {
+      applyNetState(msg);
+      if (player) setLanStatus(lanHint());
+      return;
+    }
+    if (msg.type === "promote") onPromote(msg);
+  }
+
+  function tryLan() {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return;
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    var ws;
+    try {
+      ws = new WebSocket(proto + location.host + "/ws");
+    } catch (err) {
+      return;
+    }
+    lan.ws = ws;
+    ws.onmessage = function (e) { onSocketMessage(e.data); };
+    ws.onclose = function () {
+      var was = lan.role;
+      lan.role = null;
+      lan.ready = false;
+      lan.you = null;
+      lan.ws = null;
+      if (!was) return;
+      reset();
+      setLanStatus("The shared board disconnected. This screen is its own game again.");
+    };
   }
 
   canvas.addEventListener("pointerdown", function (e) {
@@ -1288,6 +1972,12 @@
       e.preventDefault();
       setPlayerDir(Number(btn.getAttribute("data-dx")), Number(btn.getAttribute("data-dy")));
     }, { passive: false });
+  });
+
+  document.querySelectorAll("[data-mode]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      requestMode(btn.getAttribute("data-mode"));
+    });
   });
 
   window.addEventListener("keydown", function (e) {
@@ -1327,15 +2017,26 @@
   reset();
   fitCanvas();
 
+  setInterval(function () {
+    if (lan.role !== "host" || !lan.ready || debug.pause || !snakes.length) return;
+    step();
+    reviveBots(performance.now());
+    broadcast();
+  }, TICK_MS);
+
+  tryLan();
+
   window.__snakeDebug = {
     pause: function (on) { debug.pause = !!on; },
     setManualBot: function (on) { debug.manualBot = !!on; },
     setDir: setPlayerDir,
     setBotDir: function (dx, dy) {
+      if (!bot) return;
       bot.dir = { x: Math.sign(dx), y: dx ? 0 : Math.sign(dy) };
       bot.queued = null;
     },
     placePlayer: function (segments, dir) {
+      if (!player) return;
       player.alive = true;
       player.respawnAt = 0;
       player.segments = segments.map(function (s) { return { x: s.x, y: s.y }; });
@@ -1343,15 +2044,30 @@
       player.queued = null;
     },
     placeBot: function (segments, dir) {
+      if (!bot) return;
       bot.alive = true;
       bot.respawnAt = 0;
       bot.segments = segments.map(function (s) { return { x: s.x, y: s.y }; });
       bot.dir = { x: dir.x, y: dir.y };
       bot.queued = null;
     },
+    placeSnake: function (id, segments, dir) {
+      var snake = snakeById(id);
+      if (!snake) return;
+      snake.alive = true;
+      snake.respawnAt = 0;
+      snake.segments = segments.map(function (s) { return { x: s.x, y: s.y }; });
+      snake.dir = { x: dir.x, y: dir.y };
+      snake.queued = null;
+    },
+    setMode: function (mode) { requestMode(mode); },
     clearFoods: function () { foods = []; },
     addFood: function (typeId, x, y) { foods.push({ typeId: typeId, x: x, y: y }); },
-    setScore: function (n) { score = n; renderHud(); },
+    setScore: function (n) {
+      score = n;
+      if (player) player.score = n;
+      renderHud();
+    },
     setWeight: function (id, w) {
       var type = getType(id);
       if (type) type.spawnWeight = w;
@@ -1366,12 +2082,17 @@
     },
     reset: reset,
     fit: fitCanvas,
+    sync: function () { broadcast(); },
     snapshot: function () {
       return {
-        score: score,
+        score: player ? (player.score || 0) : score,
         steps: debug.steps,
+        mode: botMode,
+        role: lan.role,
+        you: lan.you,
         player: cloneSnake(player),
         bot: cloneSnake(bot),
+        snakes: snakes.map(cloneSnake),
         foods: foods.map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; }),
         pumpkins: pumpkins.map(function (p) { return { x: p.x, y: p.y }; }),
         cols: COLS,

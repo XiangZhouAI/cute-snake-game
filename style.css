@@ -117,8 +117,10 @@ h1 {
 }
 
 .hint,
+.mode-note,
 .dpad-label,
-.lengths {
+.lengths,
+.lan {
   text-align: center;
 }
 
@@ -126,6 +128,54 @@ h1 {
   margin: 8px 0;
   color: #efe4ff;
   font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.mode-note {
+  margin: 0 0 8px;
+  color: #f0e4ff;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.modes {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.modes button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff6ea;
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.modes button[aria-pressed="true"] {
+  background: linear-gradient(180deg, #ffe3b0 0%, #ff9a3c 100%);
+  color: #4a2410;
+  font-weight: 800;
+  box-shadow: 0 4px 0 #c46a1a;
+}
+
+.modes button:focus-visible {
+  outline: 3px solid #ffe08a;
+  outline-offset: 3px;
+}
+
+.lan {
+  margin: 8px 0 0;
+  color: #ffe08a;
+  font-size: 0.92rem;
   line-height: 1.35;
 }
 
@@ -234,6 +284,10 @@ canvas {
   h1 { font-size: 1.35rem; }
   .score { font-size: 1.6rem; }
   .moon { width: 48px; height: 48px; }
+  .modes button {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+  }
   .dpad {
     grid-template-columns: 64px 64px 64px;
     gap: 8px;

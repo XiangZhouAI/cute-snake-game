@@ -19,6 +19,12 @@
       <div class="moon" title="Moon" aria-hidden="true"></div>
     </header>
     <p class="hint">Arrows or WASD, swipe the board, or tap the buttons. Touch works both ways.</p>
+    <p class="mode-note" id="mode-note">Pip hunts treats and does not chase you.</p>
+    <div class="modes" role="group" aria-label="Bot mood">
+      <button type="button" data-mode="lazy" aria-pressed="true">Lazy</button>
+      <button type="button" data-mode="between" aria-pressed="false">In between</button>
+      <button type="button" data-mode="aggressive" aria-pressed="false">Aggressive</button>
+    </div>
     <div class="board-wrap">
       <canvas id="board" width="480" height="480">This game draws on a canvas.</canvas>
     </div>
@@ -29,11 +35,12 @@
       <button type="button" class="down" data-dx="0" data-dy="1" aria-label="Move down">▼</button>
       <button type="button" class="right" data-dx="1" data-dy="0" aria-label="Move right">▶</button>
     </div>
-    <p class="lengths">
+    <p class="lengths" id="lengths">
       <span class="swatch you" aria-hidden="true"></span><span id="you-len">You 4</span>
       <span class="sep" aria-hidden="true">·</span>
       <span class="swatch pip" aria-hidden="true"></span><span id="pip-len">Pip 4</span>
     </p>
+    <p class="lan" id="lan" hidden></p>
     <noscript><p class="hint">JavaScript needs to be on. The game is one page and does not need an install.</p></noscript>
   </main>
   <script src="game.js"></script>
