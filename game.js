@@ -344,7 +344,7 @@
   var bot;
   var botMode = "lazy";
   var netTick = 0;
-  var lan = { role: null, you: null, ws: null, ready: false, lastTick: 0, pendingDir: null };
+  var lan = { role: null, you: null, ws: null, ready: false, lastTick: 0, pendingDir: null, joins: [] };
   var PIP_SNACK_LENGTH = 9;
   var debug = { pause: false, manualBot: false, steps: 0 };
   var lastTime = 0;
@@ -1302,7 +1302,9 @@
       var label = document.createElement("span");
       var name = displayName(snake);
       if (snake.kind === "bot" && !snake.alive) label.textContent = name + " is coming back";
-      else label.textContent = name + " " + (snake.alive ? snake.segments.length : 0);
+      else if (lan.role && snake.kind === "human") {
+        label.textContent = name + " " + (snake.alive ? snake.segments.length : 0) + " · " + (snake.score || 0);
+      } else label.textContent = name + " " + (snake.alive ? snake.segments.length : 0);
       frag.appendChild(sw);
       frag.appendChild(label);
       count++;
@@ -1834,7 +1836,10 @@
 
   function requestWorldSize(name) {
     if (!WORLD.sizes[name]) return;
-    if (lan.role === "guest") return;
+    if (lan.role === "guest") {
+      send({ type: "size", size: name });
+      return;
+    }
     if (name === worldSizeName) return;
     worldSizeName = name;
     showWorldSize(name);
@@ -1942,11 +1947,14 @@
   }
 
   function lanHint() {
-    var host = location.host || "";
-    if (!host || host.indexOf("localhost") === 0 || host.indexOf("127.0.0.1") === 0) {
-      return "Shared board is on. From a phone, open this computer’s LAN address, port 8080.";
+    if (lan.joins && lan.joins.length) {
+      return "Same board. On the other phone, open " + lan.joins[0];
     }
-    return "Shared board. Others on this Wi-Fi open http://" + host;
+    var host = location.host || "";
+    if (host && host.indexOf("localhost") !== 0 && host.indexOf("127.0.0.1") !== 0) {
+      return "Same board. Others on this Wi-Fi open http://" + host;
+    }
+    return "Same board. On the other phone, open this computer’s LAN address, port 8080.";
   }
 
   function setLanStatus(text) {
@@ -2014,6 +2022,7 @@
   function beginAsHost(msg) {
     lan.role = "host";
     lan.you = msg.id;
+    lan.joins = msg.joins || [];
     lan.ready = false;
     reset();
     player.id = msg.id;
@@ -2027,6 +2036,7 @@
   function beginAsGuest(msg) {
     lan.role = "guest";
     lan.you = msg.id;
+    lan.joins = msg.joins || [];
     lan.ready = true;
     snakes = [];
     player = null;
@@ -2109,6 +2119,10 @@
     if (msg.type === "mode" && lan.role === "host") {
       applyMode(msg.mode);
       broadcast();
+      return;
+    }
+    if (msg.type === "size" && lan.role === "host") {
+      requestWorldSize(msg.size);
       return;
     }
     if (msg.type === "state" && lan.role === "guest") {
@@ -2284,6 +2298,7 @@
     reset: reset,
     fit: fitCanvas,
     sync: function () { broadcast(); },
+    dropLink: function () { if (lan.ws) lan.ws.close(); },
     snapshot: function () {
       updateCamera();
       return {

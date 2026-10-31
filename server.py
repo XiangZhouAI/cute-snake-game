@@ -170,17 +170,37 @@ def drop(client):
             drop(still_host)
 
 
+def lan_urls():
+    urls = []
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("192.0.2.1", 9))
+        ip = sock.getsockname()[0]
+        sock.close()
+        if ip and not ip.startswith("127."):
+            urls.append("http://%s:%d" % (ip, PORT))
+    except OSError:
+        pass
+    return urls
+
+
+def free_look():
+    used = {client.look for client in clients if client.look}
+    for idx, look in enumerate(PALETTE):
+        if look not in used:
+            return look, NAMES[idx]
+    return PALETTE[0], NAMES[0]
+
+
 def register(client):
     global next_id
     with lock:
         if len(clients) >= MAX_PLAYERS:
             return False
-        idx = len(clients)
         client.id = "p%d" % next_id
         next_id += 1
-        client.look = PALETTE[idx]
-        client.name = NAMES[idx]
-        client.role = "host" if idx == 0 else "guest"
+        client.look, client.name = free_look()
+        client.role = "host" if len(clients) == 0 else "guest"
         clients.append(client)
         current_host = host_of(clients)
         snapshot = json.loads(json.dumps(last_state)) if last_state else None
@@ -190,6 +210,7 @@ def register(client):
         "role": client.role,
         "name": client.name,
         "look": client.look,
+        "joins": lan_urls(),
     })
     print("join %s as %s (%s)" % (client.id, client.role, client.name), flush=True)
     if client.role == "guest" and current_host:
@@ -237,6 +258,16 @@ def on_message(client, obj):
         if current:
             try:
                 current.send({"type": "mode", "mode": obj.get("mode")})
+            except OSError:
+                drop(current)
+        return
+    if kind == "size" and client.role != "host":
+        current = None
+        with lock:
+            current = host_of(clients)
+        if current:
+            try:
+                current.send({"type": "size", "size": obj.get("size")})
             except OSError:
                 drop(current)
         return

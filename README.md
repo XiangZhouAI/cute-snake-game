@@ -79,31 +79,49 @@ Then open <http://127.0.0.1:8080>.
 
 Binding `0.0.0.0` also lets a phone on the same Wi-Fi open the game without Docker. Each browser still has its own board. For one shared board, use the server below instead.
 
-### Try it on a phone
+### Try one screen on a phone
 
-1. Start the server above so it is bound to `0.0.0.0` on port 8080.
+This is still a separate game on the phone. For the same board as the computer, use the steps in “A second phone joins the same game” instead.
+
+1. Start the static server above so it is bound to `0.0.0.0` on port 8080.
 2. Find this computer’s LAN IP. On Linux try `hostname -I`. On macOS try `ipconfig getifaddr en0`. On Windows run `ipconfig` and use the IPv4 address of the Wi-Fi adapter.
 3. Put the phone on the same Wi-Fi and open `http://<lan-ip>:8080` in the phone’s browser.
 4. Swipe on the board, and also tap the on-screen directional buttons. Both should steer your snake.
 5. If the phone cannot connect, the computer’s firewall may need to allow TCP 8080.
 
-## Play together on the LAN
+## A second phone joins the same game
 
-From this folder:
+This is one board, not a copy on each screen. No account.
+
+1. On the computer, from this folder, start the shared server:
 
 ```bash
 python3 server.py
 ```
 
-Then open <http://127.0.0.1:8080> on this computer. That browser is the host. On a phone or another laptop on the same Wi-Fi, open `http://<lan-ip>:8080`. Each device steers its own snake. Arrows, WASD, swipes, and the on-screen buttons all still work, and they move only your snake.
+It listens on `0.0.0.0` port 8080.
 
-Find the LAN IP the same way as above (`hostname -I`, `ipconfig getifaddr en0`, or `ipconfig`). The host firewall may need to allow TCP 8080. Leave the first screen open. If that tab closes, someone else who is still connected keeps the board.
+2. On that same computer, open <http://127.0.0.1:8080>. Leave this tab open. It is in the game too, with its own snake.
+
+3. Read the yellow line under the buttons. It shows the address for the other device, such as `http://192.168.1.20:8080`.
+
+4. Put the phone on the same Wi-Fi as the computer. Open that exact address in the phone’s browser. Do not open the file, and do not use `localhost` on the phone.
+
+5. The phone gets its own snake. Swipe the board, or tap the on-screen arrows. That steers only the phone’s snake. The computer’s keys still steer only the computer’s snake.
+
+6. Both screens show the same food, pumpkins, Pip, and scores. Each screen’s window follows its own snake and zooms to that snake’s body. The World buttons set the size for everyone: Medium 24, Large 48, or Huge 72.
+
+If the yellow line does not show an address, find the computer’s LAN IP yourself. On Linux try `hostname -I`. On macOS try `ipconfig getifaddr en0`. On Windows run `ipconfig` and use the Wi-Fi IPv4 address. Then open `http://<lan-ip>:8080`. If the phone cannot connect, allow TCP 8080 on the computer’s firewall.
+
+Up to four people. If the first tab closes, someone who is still connected keeps the same board.
 
 `server.py` is the standard library only. You do not need npm.
 
+Opening `index.html`, or the tiny static server above, is still one player on that screen. Another phone that opens the static server gets a separate game. Use `server.py` when a second device should join.
+
 ## Docker
 
-The container runs that same shared server and listens on `0.0.0.0` port 8080.
+The container runs that same shared server and listens on `0.0.0.0` port 8080. A second phone joins the container the same way: open the yellow address on the host page, which is the computer’s LAN IP and port 8080, not an address inside the container.
 
 From this folder:
 
