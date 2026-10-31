@@ -8,29 +8,25 @@ Starlight Snake is a cute Halloween snake game in a browser. It is top-down and 
 
 Glowing pumpkins are solid. Bumping a pumpkin, the edge of the board, or your own body cancels that move. You stay put, you do not die, and there is no game-over screen. Play goes on.
 
-Pip, a purple snake, shares the board. Pip hunts the candy apples and does not chase your head. If Pip gets long, it nibbles a bad treat so the board stays open. If the two snakes touch, the longer one wins and the shorter one loses about half its segments (at least one). If that would leave nothing, that snake leaves the board. You come back right away on a free spot and keep your score. Pip comes back a moment later. If you are the same length, nobody is cut: each of you stops as if the other were a wall.
+Pip, Ember, and Moth share the board. They are the same kind of snake you are. If two snakes touch, the longer one wins and the shorter one loses about half its segments (at least one). If that would leave nothing, that snake leaves the board. You come back right away on a free spot and keep your score. A bot comes back a moment later in the same mode. If you are the same length, nobody is cut: each of you stops as if the other were a wall.
 
-Your score stays on screen the whole time. The candy apple is the good treat: it grows you by one segment and adds 10 points. Bad treats shrink you by one segment and subtract 5: a rotten apple, a flashing chili, skull candy, and a leaking green can. Your score never goes below 0. Your snake never shrinks below one segment, the head. Pip grows and shrinks only itself. Only the treats you eat change your score.
+Your score stays on screen the whole time. The candy apple is the good treat: it grows you by one segment and adds 10 points. Bad treats shrink you by one segment and subtract 5: a rotten apple, a flashing chili, skull candy, and a leaking green can. Your score never goes below 0. Your snake never shrinks below one segment, the head. Bots grow and shrink only themselves. Only the treats you eat change your score.
 
-New treats can be added by registering one definition (id, drawing, score change, length change, and spawn weight). The game keeps a small mix on empty cells: one good treat and two bad ones, never on you, Pip, or a pumpkin.
+New treats can be added by registering one definition (id, drawing, score change, length change, and spawn weight). The game keeps a small mix on empty cells: one good treat and two bad ones, never on a snake or a pumpkin.
 
-## Bot moods
+## Bot modes
 
-Pip starts **Lazy**: hunts treats and does not chase you. That is the same Pip as before.
+Each bot has its own mode. The mode stays with that bot, including when the bot leaves the board and comes back. The pills under the title show the modes. They do not replace the keyboard, the swipe, or the on-screen buttons.
 
-The buttons above the board switch the mood:
-
-- **Lazy.** Pip only hunts treats. A long Pip still nibbles a bad treat so the board stays open.
-- **Aggressive.** Pip hunts you. If Pip is the shorter snake, it eats candy first, then comes after you. Touch still follows the length rule: the longer snake bites, the shorter one loses about half.
-- **In between.** Nib, a mint snake, joins Pip. They hunt treats, and a longer snake will bite a shorter one. That includes the two bots.
-
-Your controls do not change.
+- **Lazy — Pip (purple).** Hunts candy apples and does not chase snakes. Pip still avoids bad treats, and if Pip gets long it nibbles one so the board stays open. This is the same Pip as before.
+- **Aggressive — Ember (red).** Hunts the nearest other snake, you or a bot. Touch still follows the length rule.
+- **Bold — Moth (mint).** Hunts treats like Pip. If Moth is strictly longer than a nearby snake, Moth goes after that snake. If Moth is shorter, Moth does not chase.
 
 ## Shared board
 
-Opening the file, or the tiny static server below, is one game on that screen. Pip is there. Another phone gets its own separate game.
+Opening the file, or the tiny static server below, is one game on that screen. Pip, Ember, and Moth are there. Another phone gets its own separate game.
 
-To play **one** board together, run `server.py` (or Docker). The first browser hosts the board. Each later phone or laptop that opens the same address gets its own snake on that board. Keep the first screen open while you play. Up to four people. The bot mood is shared.
+To play **one** board together, run `server.py` (or Docker). The first browser hosts the board. Each later phone or laptop that opens the same address gets its own snake on that board. Keep the first screen open while you play. Up to four people. Everyone sees the same three bots, each in its own mode.
 
 ## Controls
 

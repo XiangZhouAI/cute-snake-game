@@ -19,11 +19,10 @@
       <div class="moon" title="Moon" aria-hidden="true"></div>
     </header>
     <p class="hint">Arrows or WASD, swipe the board, or tap the buttons. Touch works both ways.</p>
-    <p class="mode-note" id="mode-note">Pip hunts treats and does not chase you.</p>
-    <div class="modes" role="group" aria-label="Bot mood">
-      <button type="button" data-mode="lazy" aria-pressed="true">Lazy</button>
-      <button type="button" data-mode="between" aria-pressed="false">In between</button>
-      <button type="button" data-mode="aggressive" aria-pressed="false">Aggressive</button>
+    <div class="modes" id="modes" role="group" aria-label="Bot modes">
+      <span class="mode-pill"><i class="swatch" style="background:#b69cff" aria-hidden="true"></i><span>Pip · Lazy</span></span>
+      <span class="mode-pill"><i class="swatch" style="background:#ff5d73" aria-hidden="true"></i><span>Ember · Aggressive</span></span>
+      <span class="mode-pill"><i class="swatch" style="background:#7fd8c6" aria-hidden="true"></i><span>Moth · Bold</span></span>
     </div>
     <div class="board-wrap">
       <canvas id="board" width="480" height="480">This game draws on a canvas.</canvas>

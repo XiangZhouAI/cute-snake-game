@@ -1,7 +1,7 @@
 /* Starlight Snake — top-down 2D only.
    Segments are {x, y}. A later version could add z; this one never moves on a Z axis.
    Food score and length changes come only from the registry, not from hardcoded ids.
-   Bot moods: lazy hunts food, aggressive hunts snakes, in between does both.
+   Each bot carries a mode record. The tick loop asks that record what to hunt.
    server.py shares one board across browsers on the LAN. */
 (function () {
   "use strict";
@@ -263,7 +263,14 @@
     blush: "rgba(255, 176, 214, 0.95)",
     mark: "moon"
   };
-  var NIB_LOOK = {
+  var EMBER_LOOK = {
+    body: "#ff5d73",
+    belly: "#ffe0e4",
+    outline: "#8d2438",
+    blush: "rgba(255, 170, 150, 0.95)",
+    mark: "gem"
+  };
+  var MOTH_LOOK = {
     body: "#7fd8c6",
     belly: "#e7fff8",
     outline: "#1d6d62",
@@ -294,16 +301,66 @@
   var LOOKS = {
     sunny: PLAYER_LOOK,
     pip: BOT_LOOK,
-    nib: NIB_LOOK,
+    ember: EMBER_LOOK,
+    moth: MOTH_LOOK,
     lilac: LILAC_LOOK,
     rose: ROSE_LOOK,
     gold: GOLD_LOOK
   };
-  var MODE_NOTE = {
-    lazy: "Pip hunts treats and does not chase you.",
-    between: "Pip and Nib hunt treats. A longer snake bites a shorter one, bots included.",
-    aggressive: "Pip hunts you. If Pip is shorter, it grabs candy first, then comes after you."
+  // hunt is "food" or "snake". chaseIfLonger adds a nearby shorter snake.
+  // snackWhenLong is Pip's old nibble, so a long food hunter keeps the board open.
+  var MODES = {
+    lazy: {
+      label: "Lazy",
+      hunt: "food",
+      chaseIfLonger: false,
+      nearby: 0,
+      avoidSnakes: true,
+      snackWhenLong: true
+    },
+    aggressive: {
+      label: "Aggressive",
+      hunt: "snake",
+      chaseIfLonger: false,
+      nearby: 0,
+      avoidSnakes: false,
+      snackWhenLong: false
+    },
+    bold: {
+      label: "Bold",
+      hunt: "food",
+      chaseIfLonger: true,
+      nearby: 4,
+      avoidSnakes: true,
+      snackWhenLong: true
+    }
   };
+  var BOT_DEFS = [
+    {
+      id: "bot",
+      name: "Pip",
+      lookId: "pip",
+      mode: "lazy",
+      dir: { x: -1, y: 0 },
+      segments: [{ x: 8, y: 1 }, { x: 9, y: 1 }, { x: 10, y: 1 }, { x: 11, y: 1 }]
+    },
+    {
+      id: "ember",
+      name: "Ember",
+      lookId: "ember",
+      mode: "aggressive",
+      dir: { x: -1, y: 0 },
+      segments: [{ x: 8, y: 11 }, { x: 9, y: 11 }, { x: 10, y: 11 }, { x: 11, y: 11 }]
+    },
+    {
+      id: "moth",
+      name: "Moth",
+      lookId: "moth",
+      mode: "bold",
+      dir: { x: 1, y: 0 },
+      segments: [{ x: 3, y: 3 }, { x: 2, y: 3 }, { x: 1, y: 3 }, { x: 0, y: 3 }]
+    }
+  ];
 
   var BOARD_STARS = [
     { fx: 0.12, fy: 0.08, r: 1.2, p: 0.2 },
@@ -333,7 +390,6 @@
   var snakes = [];
   var player;
   var bot;
-  var botMode = "lazy";
   var netTick = 0;
   var lan = { role: null, you: null, ws: null, ready: false, lastTick: 0, pendingDir: null };
   var PIP_SNACK_LENGTH = 9;
@@ -385,41 +441,24 @@
     };
   }
 
-  function makeBot() {
+  function makeRosterBot(def) {
     return {
-      id: "bot",
-      name: "Pip",
+      id: def.id,
+      name: def.name,
       kind: "bot",
-      lookId: "pip",
-      mode: botMode === "between" ? "between" : botMode,
+      lookId: def.lookId,
+      mode: def.mode,
       score: 0,
       alive: true,
-      dir: { x: -1, y: 0 },
+      dir: { x: def.dir.x, y: def.dir.y },
       queued: null,
       respawnAt: 0,
-      segments: [
-        { x: 8, y: 1 },
-        { x: 9, y: 1 },
-        { x: 10, y: 1 },
-        { x: 11, y: 1 }
-      ]
+      segments: def.segments.map(function (s) { return { x: s.x, y: s.y }; })
     };
   }
 
-  function makeNib() {
-    return {
-      id: "nib",
-      name: "Nib",
-      kind: "bot",
-      lookId: "nib",
-      mode: "between",
-      score: 0,
-      alive: false,
-      dir: { x: -1, y: 0 },
-      queued: null,
-      respawnAt: 0,
-      segments: []
-    };
+  function modeOf(snake) {
+    return MODES[snake && snake.mode] || MODES.lazy;
   }
 
   function makeHuman(id, name, lookId) {
@@ -640,19 +679,14 @@
   function botCellBlocked(snake, nx, ny) {
     if (!inBounds(nx, ny) || isPumpkin(nx, ny)) return true;
     if (occupies(snake, nx, ny, true)) return true;
-    var mode = snake.mode || "lazy";
     var others = othersOf(snake);
     var i;
     for (i = 0; i < others.length; i++) {
       var other = others[i];
-      var head = other.segments[0];
-      var longer = snake.segments.length > other.segments.length;
-      if (mode === "lazy") {
-        if (head.x === nx && head.y === ny) return true;
-        if (snake.segments.length === other.segments.length && occupies(other, nx, ny, false)) return true;
-      } else if (!longer && occupies(other, nx, ny, false)) {
-        return true;
-      }
+      if (!occupies(other, nx, ny, false)) continue;
+      if (snake.segments.length === other.segments.length) return true;
+      if (snake.huntId && snake.huntId === other.id) return false;
+      if (other.segments[0].x === nx && other.segments[0].y === ny) return true;
     }
     return false;
   }
@@ -660,22 +694,25 @@
   function stepCost(snake, nx, ny) {
     var cost = 1;
     var food = foodAt(nx, ny);
-    var mode = snake.mode || "lazy";
+    var mode = modeOf(snake);
+    var length = snake.segments.length;
+    var snacking = !snake.huntId && mode.snackWhenLong && length >= PIP_SNACK_LENGTH;
     if (food) {
       var type = getType(food.typeId);
-      if (type && type.lengthDelta < 0 && snake.segments.length < PIP_SNACK_LENGTH) cost += 16;
-      if (type && type.lengthDelta > 0 && snake.segments.length >= PIP_SNACK_LENGTH) cost += 12;
+      if (type && type.lengthDelta < 0 && !snacking) cost += 16;
+      if (type && type.lengthDelta > 0 && snacking) cost += 12;
     }
-    var others = othersOf(snake);
-    var i, s;
-    for (i = 0; i < others.length; i++) {
-      var other = others[i];
-      var prey = mode !== "lazy" && snake.segments.length > other.segments.length;
-      if (prey) continue;
-      var head = other.segments[0];
-      if (Math.abs(head.x - nx) + Math.abs(head.y - ny) === 1) cost += 8;
-      for (s = 1; s < other.segments.length; s++) {
-        if (other.segments[s].x === nx && other.segments[s].y === ny) cost += 6;
+    if (mode.avoidSnakes) {
+      var others = othersOf(snake);
+      var i, s;
+      for (i = 0; i < others.length; i++) {
+        var other = others[i];
+        if (snake.huntId && snake.huntId === other.id) continue;
+        var head = other.segments[0];
+        if (Math.abs(head.x - nx) + Math.abs(head.y - ny) === 1) cost += 8;
+        for (s = 1; s < other.segments.length; s++) {
+          if (other.segments[s].x === nx && other.segments[s].y === ny) cost += 6;
+        }
       }
     }
     return cost;
@@ -734,26 +771,50 @@
     return { x: x - head.x, y: y - head.y };
   }
 
-  function nearestPrey(snake) {
-    var others = othersOf(snake);
+  function snakeDist(head, other) {
+    var best = Infinity;
+    var i;
+    for (i = 0; i < other.segments.length; i++) {
+      var dist = Math.abs(other.segments[i].x - head.x) + Math.abs(other.segments[i].y - head.y);
+      if (dist < best) best = dist;
+    }
+    return best;
+  }
+
+  function nearestSnake(snake, list) {
     var best = null;
     var bestD = Infinity;
     var head = snake.segments[0];
-    for (var i = 0; i < others.length; i++) {
-      var other = others[i];
-      if (snake.segments.length <= other.segments.length) continue;
-      var oh = other.segments[0];
-      var dist = Math.abs(oh.x - head.x) + Math.abs(oh.y - head.y);
-      if (dist < bestD) {
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var dist = snakeDist(head, list[i]);
+      if (dist < bestD || (dist === bestD && best && list[i].id < best.id)) {
         bestD = dist;
-        best = oh;
+        best = list[i];
       }
     }
     return best;
   }
 
+  function pickPrey(snake, mode) {
+    var others = othersOf(snake);
+    var head = snake.segments[0];
+    if (mode.chaseIfLonger) {
+      var shorter = [];
+      var i;
+      for (i = 0; i < others.length; i++) {
+        if (snake.segments.length > others[i].segments.length && snakeDist(head, others[i]) <= mode.nearby) {
+          shorter.push(others[i]);
+        }
+      }
+      if (shorter.length) return nearestSnake(snake, shorter);
+    }
+    if (mode.hunt === "snake") return nearestSnake(snake, others);
+    return null;
+  }
+
   function fallbackDir(snake, head) {
-    var mode = snake.mode || "lazy";
+    var mode = modeOf(snake);
     var options = [
       { x: 0, y: -1 },
       { x: -1, y: 0 },
@@ -762,7 +823,7 @@
     ];
     var best = null;
     var bestScore = Infinity;
-    var prey = mode === "lazy" ? null : nearestPrey(snake);
+    var prey = snake.huntId ? snakeById(snake.huntId) : null;
     var others = othersOf(snake);
     for (var i = 0; i < options.length; i++) {
       var d = options[i];
@@ -772,7 +833,7 @@
       if (botCellBlocked(snake, nx, ny)) continue;
       var scoreHere = stepCost(snake, nx, ny);
       if (d.x === snake.dir.x && d.y === snake.dir.y) scoreHere -= 0.4;
-      if (mode === "lazy") {
+      if (!prey && mode.avoidSnakes) {
         var o;
         for (o = 0; o < others.length; o++) {
           var ph = others[o].segments[0];
@@ -781,9 +842,9 @@
           if (next < now) scoreHere += 4;
         }
       } else if (prey) {
-        var preyNow = Math.abs(prey.x - head.x) + Math.abs(prey.y - head.y);
-        var preyNext = Math.abs(prey.x - nx) + Math.abs(prey.y - ny);
-        if (preyNext < preyNow) scoreHere -= 3;
+        var preyNow = snakeDist(head, prey);
+        var preyNext = snakeDist({ x: nx, y: ny }, prey);
+        if (preyNext < preyNow) scoreHere -= 4;
       }
       if (scoreHere < bestScore) {
         bestScore = scoreHere;
@@ -793,7 +854,7 @@
     return best;
   }
 
-  function foodGoals(snake) {
+  function foodGoals(snake, mode) {
     var good = [];
     var bad = [];
     for (var i = 0; i < foods.length; i++) {
@@ -802,20 +863,33 @@
       if (type.lengthDelta > 0) good.push(foods[i]);
       else if (type.lengthDelta < 0) bad.push(foods[i]);
     }
-    // Hunt candy. Once a bot is long enough to crowd the board, nibble a bad treat first.
-    if (snake.segments.length >= PIP_SNACK_LENGTH && bad.length) return bad;
+    if (mode.snackWhenLong && snake.segments.length >= PIP_SNACK_LENGTH && bad.length) return bad;
     return good;
   }
 
-  function preyGoals(snake) {
+  function huntGoals(snake, prey) {
     var goals = [];
-    var others = othersOf(snake);
-    var i, s;
-    for (i = 0; i < others.length; i++) {
-      var other = others[i];
-      if (snake.segments.length <= other.segments.length) continue;
-      for (s = 0; s < other.segments.length; s++) {
-        goals.push({ x: other.segments[s].x, y: other.segments[s].y });
+    var s;
+    if (snake.segments.length !== prey.segments.length) {
+      for (s = 0; s < prey.segments.length; s++) goals.push(prey.segments[s]);
+      return goals;
+    }
+    var head = snake.segments[0];
+    var dirs = [
+      { x: 0, y: -1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 }
+    ];
+    for (s = 0; s < prey.segments.length; s++) {
+      var cell = prey.segments[s];
+      var d;
+      for (d = 0; d < dirs.length; d++) {
+        var nx = cell.x + dirs[d].x;
+        var ny = cell.y + dirs[d].y;
+        if (nx === head.x && ny === head.y) continue;
+        if (botCellBlocked(snake, nx, ny)) continue;
+        goals.push({ x: nx, y: ny });
       }
     }
     return goals;
@@ -823,23 +897,17 @@
 
   function chooseBotDirection(snake) {
     if (!snake || !snake.alive || !snake.segments.length) return null;
-    var mode = snake.mode || "lazy";
+    var mode = modeOf(snake);
+    var prey = pickPrey(snake, mode);
+    snake.huntId = prey ? prey.id : null;
+    var goals = prey ? huntGoals(snake, prey) : (mode.hunt === "food" ? foodGoals(snake, mode) : []);
     var head = snake.segments[0];
-    var goals;
-    if (mode === "aggressive") {
-      var prey = preyGoals(snake);
-      goals = prey.length ? prey : foodGoals(snake);
-    } else if (mode === "between") {
-      goals = foodGoals(snake).concat(preyGoals(snake));
-    } else {
-      goals = foodGoals(snake);
-    }
     var dir = goals.length ? shortestDir(snake, head, goals) : null;
     if (!dir) dir = fallbackDir(snake, head);
-    if (!dir) return null;
-    if (snake.segments.length > 1 && dir.x === -snake.dir.x && dir.y === -snake.dir.y) {
-      return fallbackDir(snake, head);
+    if (dir && snake.segments.length > 1 && dir.x === -snake.dir.x && dir.y === -snake.dir.y) {
+      dir = fallbackDir(snake, head);
     }
+    snake.huntId = null;
     return dir;
   }
 
@@ -1162,7 +1230,38 @@
     if (player) score = player.score || 0;
   }
 
+  function renderModes() {
+    var el = document.getElementById("modes");
+    if (!el) return;
+    var bots = [];
+    var i;
+    for (i = 0; i < snakes.length; i++) {
+      if (snakes[i].kind === "bot") bots.push(snakes[i]);
+    }
+    var key = bots.map(function (s) { return s.id + ":" + s.mode; }).join("|");
+    if (el.getAttribute("data-key") === key) return;
+    el.setAttribute("data-key", key);
+    while (el.firstChild) el.removeChild(el.firstChild);
+    for (i = 0; i < bots.length; i++) {
+      var snake = bots[i];
+      var mode = modeOf(snake);
+      var pill = document.createElement("span");
+      pill.className = "mode-pill";
+      var sw = document.createElement("i");
+      sw.className = "swatch";
+      sw.setAttribute("aria-hidden", "true");
+      var look = LOOKS[snake.lookId];
+      if (look) sw.style.background = look.body;
+      var label = document.createElement("span");
+      label.textContent = snake.name + " · " + mode.label;
+      pill.appendChild(sw);
+      pill.appendChild(label);
+      el.appendChild(pill);
+    }
+  }
+
   function renderHud() {
+    renderModes();
     var shown = player ? (player.score || 0) : score;
     var scoreText = "Score " + shown;
     if (scoreEl.textContent !== scoreText) scoreEl.textContent = scoreText;
@@ -1648,58 +1747,6 @@
     return n;
   }
 
-  function showMode(mode) {
-    if (mode !== "lazy" && mode !== "between" && mode !== "aggressive") mode = "lazy";
-    botMode = mode;
-    var note = document.getElementById("mode-note");
-    if (note) note.textContent = MODE_NOTE[mode];
-    var buttons = document.querySelectorAll("[data-mode]");
-    for (var i = 0; i < buttons.length; i++) {
-      buttons[i].setAttribute("aria-pressed", buttons[i].getAttribute("data-mode") === mode ? "true" : "false");
-    }
-  }
-
-  function dismissNib() {
-    var nib = snakeById("nib");
-    if (!nib) return;
-    if (nib.alive && nib.segments.length) burst(nib.segments[0].x, nib.segments[0].y, popColor(nib));
-    snakes = snakes.filter(function (s) { return s !== nib; });
-  }
-
-  function bringNib() {
-    var nib = snakeById("nib");
-    if (!nib) {
-      nib = makeNib();
-      snakes.push(nib);
-    }
-    nib.mode = "between";
-    if (!nib.alive) {
-      if (!respawnSnake(nib, 4) && !respawnSnake(nib, 3) && !respawnSnake(nib, 1)) {
-        nib.respawnAt = performance.now() + BOT_RESPAWN_MS;
-      }
-    }
-  }
-
-  function applyMode(mode) {
-    if (mode !== "lazy" && mode !== "between" && mode !== "aggressive") return;
-    var prev = botMode;
-    showMode(mode);
-    if (bot) bot.mode = mode;
-    if (mode === "between") bringNib();
-    else if (prev === "between") dismissNib();
-    renderHud();
-  }
-
-  function requestMode(mode) {
-    if (lan.role === "guest") {
-      showMode(mode);
-      send({ type: "mode", mode: mode });
-      return;
-    }
-    applyMode(mode);
-    if (lan.role === "host") broadcast();
-  }
-
   function reset() {
     score = 0;
     foods = [];
@@ -1708,12 +1755,11 @@
     debug.manualBot = false;
     debug.steps = 0;
     player = makePlayer();
-    bot = makeBot();
-    snakes = [player, bot];
+    var roster = BOT_DEFS.map(makeRosterBot);
+    bot = roster[0];
+    snakes = [player].concat(roster);
     setupFoods();
     ensureFoods();
-    if (botMode === "between") bringNib();
-    showMode(botMode);
     renderHud();
   }
 
@@ -1730,7 +1776,6 @@
     return {
       type: "state",
       tick: netTick,
-      mode: botMode,
       foods: foods.map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; }),
       snakes: snakes.map(function (s) {
         return {
@@ -1796,7 +1841,6 @@
     if (msg.tick && lan.lastTick && msg.tick < lan.lastTick) return;
     if (msg.tick) lan.lastTick = msg.tick;
     var oldScore = player ? (player.score || 0) : 0;
-    if (msg.mode) showMode(msg.mode);
     foods = (msg.foods || []).map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; });
     snakes = msg.snakes.map(reviveFromNet);
     player = lan.you ? snakeById(lan.you) : null;
@@ -1913,11 +1957,6 @@
       queueRemote(msg.id, msg.dir);
       return;
     }
-    if (msg.type === "mode" && lan.role === "host") {
-      applyMode(msg.mode);
-      broadcast();
-      return;
-    }
     if (msg.type === "state" && lan.role === "guest") {
       applyNetState(msg);
       if (player) setLanStatus(lanHint());
@@ -1972,12 +2011,6 @@
       e.preventDefault();
       setPlayerDir(Number(btn.getAttribute("data-dx")), Number(btn.getAttribute("data-dy")));
     }, { passive: false });
-  });
-
-  document.querySelectorAll("[data-mode]").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      requestMode(btn.getAttribute("data-mode"));
-    });
   });
 
   window.addEventListener("keydown", function (e) {
@@ -2060,7 +2093,11 @@
       snake.dir = { x: dir.x, y: dir.y };
       snake.queued = null;
     },
-    setMode: function (mode) { requestMode(mode); },
+    modes: function () {
+      return snakes.filter(function (s) { return s.kind === "bot"; }).map(function (s) {
+        return { id: s.id, name: s.name, mode: s.mode };
+      });
+    },
     clearFoods: function () { foods = []; },
     addFood: function (typeId, x, y) { foods.push({ typeId: typeId, x: x, y: y }); },
     setScore: function (n) {
@@ -2087,7 +2124,7 @@
       return {
         score: player ? (player.score || 0) : score,
         steps: debug.steps,
-        mode: botMode,
+        mode: bot ? bot.mode : null,
         role: lan.role,
         you: lan.you,
         player: cloneSnake(player),
