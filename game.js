@@ -6,12 +6,23 @@
 (function () {
   "use strict";
 
-  var COLS = 12;
-  var ROWS = 12;
+  // One place for the world and the camera. Buttons below use these sizes.
+  var WORLD = {
+    defaultSize: "large",
+    sizes: {
+      medium: { cols: 24, rows: 24 },
+      large: { cols: 48, rows: 48 },
+      huge: { cols: 72, rows: 72 }
+    },
+    minView: 11,
+    viewMargin: 3,
+    pumpkinEvery: 160
+  };
+  var worldSizeName = WORLD.defaultSize;
+  var COLS = WORLD.sizes[worldSizeName].cols;
+  var ROWS = WORLD.sizes[worldSizeName].rows;
   var TICK_MS = 150;
   var BOT_RESPAWN_MS = 2000;
-  var GOOD_KEEP = 1;
-  var BAD_KEEP = 2;
 
   var canvas = document.getElementById("board");
   var ctx = canvas.getContext("2d");
@@ -21,6 +32,7 @@
   var cellSize = 32;
   var cssW = 480;
   var cssH = 480;
+  var view = { left: 0, top: 0, span: WORLD.minView };
   var dpr = 1;
 
   var foodTypes = [];
@@ -243,11 +255,8 @@
     draw: function (context, cx, cy, s) { drawSlimeCan(context, cx, cy, s); }
   });
 
-  var pumpkins = [
-    [5, 2], [8, 4], [2, 5], [6, 6], [10, 5], [4, 9], [9, 10], [1, 8]
-  ].map(function (pair) { return { x: pair[0], y: pair[1] }; });
-
-  var pumpkinSet = new Set(pumpkins.map(function (p) { return p.x + "," + p.y; }));
+  var pumpkins = [];
+  var pumpkinSet = new Set();
 
   var PLAYER_LOOK = {
     body: "#ff9a3c",
@@ -376,16 +385,21 @@
       dir: { x: 1, y: 0 },
       queued: null,
       respawnAt: 0,
-      segments: [
-        { x: 3, y: 7 },
-        { x: 2, y: 7 },
-        { x: 1, y: 7 },
-        { x: 0, y: 7 }
-      ]
+      segments: (function () {
+        var y = Math.floor(ROWS / 2);
+        return [
+          { x: 4, y: y },
+          { x: 3, y: y },
+          { x: 2, y: y },
+          { x: 1, y: y }
+        ];
+      })()
     };
   }
 
   function makeBot() {
+    var y = Math.max(1, Math.floor(ROWS / 5));
+    var headX = Math.max(6, COLS - 5);
     return {
       id: "bot",
       name: "Pip",
@@ -398,10 +412,10 @@
       queued: null,
       respawnAt: 0,
       segments: [
-        { x: 8, y: 1 },
-        { x: 9, y: 1 },
-        { x: 10, y: 1 },
-        { x: 11, y: 1 }
+        { x: headX, y: y },
+        { x: headX + 1, y: y },
+        { x: headX + 2, y: y },
+        { x: headX + 3, y: y }
       ]
     };
   }
@@ -551,29 +565,130 @@
     return n;
   }
 
+  function targetGood() {
+    return Math.max(2, Math.round((COLS * ROWS) / 480));
+  }
+
+  function targetBad() {
+    return Math.max(3, Math.round((COLS * ROWS) / 260));
+  }
+
   function ensureFoods() {
     var guard = 0;
-    while (countKind("good") < GOOD_KEEP && guard++ < 30) {
+    var good = targetGood();
+    var bad = targetBad();
+    while (countKind("good") < good && guard++ < 80) {
       if (!spawnFood("good")) break;
     }
     guard = 0;
-    while (countKind("bad") < BAD_KEEP && guard++ < 30) {
+    while (countKind("bad") < bad && guard++ < 80) {
       if (!spawnFood("bad")) break;
     }
   }
 
   function setupFoods() {
-    foods = [
-      { typeId: "candy-apple", x: 1, y: 4 },
-      { typeId: "rotten-apple", x: 8, y: 8 },
-      { typeId: "chili", x: 4, y: 10 }
-    ];
+    foods = [];
+    if (!player || !player.segments.length) return;
+    var head = player.segments[0];
+    var ahead = { x: head.x + player.dir.x * 6, y: head.y + player.dir.y * 6 };
+    if (inBounds(ahead.x, ahead.y) && !isPumpkin(ahead.x, ahead.y) && !occupiedByAny(ahead.x, ahead.y)) {
+      foods.push({ typeId: "candy-apple", x: ahead.x, y: ahead.y });
+    }
+  }
+
+  function usePumpkins(list) {
+    pumpkins = list.map(function (p) { return { x: p.x, y: p.y }; });
+    pumpkinSet = new Set(pumpkins.map(function (p) { return p.x + "," + p.y; }));
+  }
+
+  function buildPumpkins() {
+    var count = Math.max(6, Math.round((COLS * ROWS) / WORLD.pumpkinEvery));
+    var blocked = {};
+    function blockSnake(snake, pad) {
+      if (!snake) return;
+      var i, dx, dy;
+      for (i = 0; i < snake.segments.length; i++) {
+        var seg = snake.segments[i];
+        for (dy = -pad; dy <= pad; dy++) {
+          for (dx = -pad; dx <= pad; dx++) {
+            blocked[(seg.x + dx) + "," + (seg.y + dy)] = true;
+          }
+        }
+      }
+    }
+    blockSnake(player, 2);
+    blockSnake(bot, 2);
+    var placed = [];
+    var guard = 0;
+    while (placed.length < count && guard++ < count * 80) {
+      var x = Math.floor(Math.random() * COLS);
+      var y = Math.floor(Math.random() * ROWS);
+      if (blocked[x + "," + y]) continue;
+      var spaced = true;
+      var i;
+      for (i = 0; i < placed.length; i++) {
+        if (Math.max(Math.abs(placed[i].x - x), Math.abs(placed[i].y - y)) < 3) {
+          spaced = false;
+          break;
+        }
+      }
+      if (!spaced) continue;
+      placed.push({ x: x, y: y });
+      blocked[x + "," + y] = true;
+    }
+    usePumpkins(placed);
+  }
+
+  function updateCamera() {
+    var span = WORLD.minView;
+    var cx = COLS / 2;
+    var cy = ROWS / 2;
+    var snake = player && player.alive && player.segments.length ? player : null;
+    if (snake) {
+      var head = snake.segments[0];
+      var minX = head.x;
+      var maxX = head.x;
+      var minY = head.y;
+      var maxY = head.y;
+      var i;
+      for (i = 1; i < snake.segments.length; i++) {
+        var seg = snake.segments[i];
+        if (seg.x < minX) minX = seg.x;
+        if (seg.x > maxX) maxX = seg.x;
+        if (seg.y < minY) minY = seg.y;
+        if (seg.y > maxY) maxY = seg.y;
+      }
+      var pad = WORLD.viewMargin;
+      var needX = (maxX - minX + 1) + pad * 2;
+      var needY = (maxY - minY + 1) + pad * 2;
+      span = Math.max(WORLD.minView, needX, needY);
+      if (needX <= WORLD.minView && needY <= WORLD.minView) {
+        cx = head.x + 0.5;
+        cy = head.y + 0.5;
+      } else {
+        cx = (minX + maxX + 1) / 2;
+        cy = (minY + maxY + 1) / 2;
+      }
+    }
+    if (span > COLS) span = COLS;
+    if (span > ROWS) span = ROWS;
+    var left = cx - span / 2;
+    var top = cy - span / 2;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (left + span > COLS) left = Math.max(0, COLS - span);
+    if (top + span > ROWS) top = Math.max(0, ROWS - span);
+    view.left = left;
+    view.top = top;
+    view.span = span;
+    var side = Math.min(cssW || 1, cssH || 1);
+    cellSize = side / span;
   }
 
   function cellCenter(x, y) {
     return {
-      cx: x * cellSize + cellSize / 2,
-      cy: y * cellSize + cellSize / 2
+      cx: (x - view.left) * cellSize + cellSize / 2,
+      cy: (y - view.top) * cellSize + cellSize / 2
     };
   }
 
@@ -1239,9 +1354,13 @@
     ctx.globalAlpha = 1;
 
     ctx.fillStyle = "rgba(255,255,255,0.04)";
+    var x0 = Math.max(0, Math.floor(view.left));
+    var y0 = Math.max(0, Math.floor(view.top));
+    var x1 = Math.min(COLS, Math.ceil(view.left + view.span));
+    var y1 = Math.min(ROWS, Math.ceil(view.top + view.span));
     var x, y;
-    for (y = 0; y < ROWS; y++) {
-      for (x = 0; x < COLS; x++) {
+    for (y = y0; y < y1; y++) {
+      for (x = x0; x < x1; x++) {
         var dot = cellCenter(x, y);
         ctx.beginPath();
         ctx.arc(dot.cx, dot.cy, 1.15, 0, Math.PI * 2);
@@ -1491,6 +1610,7 @@
   }
 
   function draw(time) {
+    updateCamera();
     if (!cellSize) return;
     drawBoard(time);
     var web = cellSize * 1.7;
@@ -1545,7 +1665,7 @@
     canvas.width = Math.max(1, Math.round(cssW * dpr));
     canvas.height = Math.max(1, Math.round(cssH * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cellSize = cssW / COLS;
+    updateCamera();
     boardWrap.style.width = Math.ceil(cssW + 12) + "px";
     boardWrap.style.marginLeft = "auto";
     boardWrap.style.marginRight = "auto";
@@ -1560,6 +1680,7 @@
     var hint = document.querySelector(".hint");
     var modeNote = document.querySelector(".mode-note");
     var modes = document.querySelector(".modes");
+    var sizes = document.querySelector(".sizes");
     var label = document.querySelector(".dpad-label");
     var dpad = document.querySelector(".dpad");
     var lengths = document.querySelector(".lengths");
@@ -1569,16 +1690,17 @@
     if (hint) used += hint.offsetHeight;
     if (modeNote) used += modeNote.offsetHeight;
     if (modes) used += modes.offsetHeight;
+    if (sizes) used += sizes.offsetHeight;
     if (label) used += label.offsetHeight;
     if (dpad) used += dpad.offsetHeight;
     if (lengths) used += lengths.offsetHeight;
     if (lanEl && !lanEl.hidden) used += lanEl.offsetHeight;
     var maxH = Math.max(160, window.innerHeight - used);
     var nextW = avail;
-    var nextH = nextW * (ROWS / COLS);
+    var nextH = nextW;
     if (nextH > maxH) {
       nextH = maxH;
-      nextW = nextH * (COLS / ROWS);
+      nextW = nextH;
     }
     paintSize(nextW, nextH);
     var edge = (lanEl && !lanEl.hidden) ? lanEl : lengths;
@@ -1586,7 +1708,7 @@
       var overflow = edge.getBoundingClientRect().bottom - (window.innerHeight - 8);
       if (overflow > 1) {
         var shrunk = Math.max(160, nextH - overflow);
-        paintSize(shrunk * (COLS / ROWS), shrunk);
+        paintSize(shrunk, shrunk);
       }
     }
     if (cellSize) draw(performance.now());
@@ -1700,8 +1822,55 @@
     if (lan.role === "host") broadcast();
   }
 
+  function showWorldSize(name) {
+    if (!WORLD.sizes[name]) name = WORLD.defaultSize;
+    worldSizeName = name;
+    var buttons = document.querySelectorAll("[data-size]");
+    var i;
+    for (i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute("aria-pressed", buttons[i].getAttribute("data-size") === name ? "true" : "false");
+    }
+  }
+
+  function requestWorldSize(name) {
+    if (!WORLD.sizes[name]) return;
+    if (lan.role === "guest") return;
+    if (name === worldSizeName) return;
+    worldSizeName = name;
+    showWorldSize(name);
+    reset();
+    if (lan.role === "host") broadcast();
+  }
+
   function reset() {
-    score = 0;
+    var peers = [];
+    var selfId = null;
+    var selfName = null;
+    var selfLook = null;
+    var selfScore = 0;
+    if (lan.role === "host" && player && player.id && player.id !== "player") {
+      selfId = player.id;
+      selfName = player.name;
+      selfLook = player.lookId;
+      selfScore = player.score || 0;
+      var i;
+      for (i = 0; i < snakes.length; i++) {
+        var existing = snakes[i];
+        if (existing.kind === "human" && existing.id !== player.id) {
+          peers.push({
+            id: existing.id,
+            name: existing.name,
+            lookId: existing.lookId,
+            score: existing.score || 0
+          });
+        }
+      }
+    }
+    var spec = WORLD.sizes[worldSizeName] || WORLD.sizes[WORLD.defaultSize];
+    worldSizeName = WORLD.sizes[worldSizeName] ? worldSizeName : WORLD.defaultSize;
+    COLS = spec.cols;
+    ROWS = spec.rows;
+    score = selfScore;
     foods = [];
     particles = [];
     floaters = [];
@@ -1709,11 +1878,26 @@
     debug.steps = 0;
     player = makePlayer();
     bot = makeBot();
+    if (selfId) {
+      player.id = selfId;
+      player.name = selfName || player.name;
+      player.lookId = selfLook || player.lookId;
+      player.score = selfScore;
+    }
     snakes = [player, bot];
+    buildPumpkins();
     setupFoods();
     ensureFoods();
+    var p;
+    for (p = 0; p < peers.length; p++) {
+      var human = makeHuman(peers[p].id, peers[p].name, peers[p].lookId);
+      human.score = peers[p].score;
+      snakes.push(human);
+      if (!respawnSnake(human, 4) && !respawnSnake(human, 3)) respawnSnake(human, 1);
+    }
     if (botMode === "between") bringNib();
     showMode(botMode);
+    showWorldSize(worldSizeName);
     renderHud();
   }
 
@@ -1731,6 +1915,8 @@
       type: "state",
       tick: netTick,
       mode: botMode,
+      world: { name: worldSizeName, cols: COLS, rows: ROWS },
+      pumpkins: pumpkins.map(function (p) { return { x: p.x, y: p.y }; }),
       foods: foods.map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; }),
       snakes: snakes.map(function (s) {
         return {
@@ -1795,6 +1981,13 @@
     if (!msg || !msg.snakes) return;
     if (msg.tick && lan.lastTick && msg.tick < lan.lastTick) return;
     if (msg.tick) lan.lastTick = msg.tick;
+    if (msg.world && msg.world.cols && msg.world.rows) {
+      COLS = msg.world.cols;
+      ROWS = msg.world.rows;
+      if (msg.world.name && WORLD.sizes[msg.world.name]) worldSizeName = msg.world.name;
+      showWorldSize(worldSizeName);
+    }
+    if (msg.pumpkins) usePumpkins(msg.pumpkins);
     var oldScore = player ? (player.score || 0) : 0;
     if (msg.mode) showMode(msg.mode);
     foods = (msg.foods || []).map(function (f) { return { typeId: f.typeId, x: f.x, y: f.y }; });
@@ -1980,6 +2173,12 @@
     });
   });
 
+  document.querySelectorAll("[data-size]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      requestWorldSize(btn.getAttribute("data-size"));
+    });
+  });
+
   window.addEventListener("keydown", function (e) {
     var map = {
       ArrowUp: [0, -1],
@@ -2061,6 +2260,8 @@
       snake.queued = null;
     },
     setMode: function (mode) { requestMode(mode); },
+    setWorld: function (name) { requestWorldSize(name); },
+    usePumpkins: usePumpkins,
     clearFoods: function () { foods = []; },
     addFood: function (typeId, x, y) { foods.push({ typeId: typeId, x: x, y: y }); },
     setScore: function (n) {
@@ -2084,10 +2285,12 @@
     fit: fitCanvas,
     sync: function () { broadcast(); },
     snapshot: function () {
+      updateCamera();
       return {
         score: player ? (player.score || 0) : score,
         steps: debug.steps,
         mode: botMode,
+        size: worldSizeName,
         role: lan.role,
         you: lan.you,
         player: cloneSnake(player),
@@ -2097,6 +2300,7 @@
         pumpkins: pumpkins.map(function (p) { return { x: p.x, y: p.y }; }),
         cols: COLS,
         rows: ROWS,
+        view: { left: view.left, top: view.top, span: view.span },
         paused: debug.pause,
         manualBot: debug.manualBot
       };

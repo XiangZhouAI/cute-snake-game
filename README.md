@@ -12,7 +12,17 @@ Pip, a purple snake, shares the board. Pip hunts the candy apples and does not c
 
 Your score stays on screen the whole time. The candy apple is the good treat: it grows you by one segment and adds 10 points. Bad treats shrink you by one segment and subtract 5: a rotten apple, a flashing chili, skull candy, and a leaking green can. Your score never goes below 0. Your snake never shrinks below one segment, the head. Pip grows and shrinks only itself. Only the treats you eat change your score.
 
-New treats can be added by registering one definition (id, drawing, score change, length change, and spawn weight). The game keeps a small mix on empty cells: one good treat and two bad ones, never on you, Pip, or a pumpkin.
+New treats can be added by registering one definition (id, drawing, score change, length change, and spawn weight). Treats are scattered on empty cells across the whole world. A larger world keeps a few more of them, still with open space. One good treat grows you and adds points. Bad treats shrink you and subtract points. They never land on you, Pip, or a pumpkin.
+
+## World and camera
+
+The old playfield was 12 by 12, and the page showed all of it. The default now is **Large**, 48 by 48. That is four times the old board on each side. **Medium** is 24 by 24. **Huge** is 72 by 72.
+
+The World buttons sit above the board: Medium, Large, and Huge. Choosing a size builds a new board. Food, pumpkins, and Pip are placed across that whole world. Pumpkins stay spaced out, so the bigger maps are not a maze.
+
+You do not see the whole world at once. The view is a window around your snake, and it moves with you. A short snake is zoomed in. The window is at least 11 cells across, so you can steer and still see nearby treats and pumpkins. If your snake grows long or stretches out, the window zooms out until the whole body fits, with a small margin. It does not zoom out to the entire map just to show a short snake. On a shared board, each person's window follows their own snake. Other snakes show up when they are inside that window.
+
+Those sizes live in the `WORLD` object at the top of `game.js`.
 
 ## Bot moods
 
